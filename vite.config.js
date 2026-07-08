@@ -9,15 +9,33 @@ import vue from "@vitejs/plugin-vue";
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
+const crossOriginIsolationHeaders = {
+  'Cross-Origin-Opener-Policy': 'same-origin',
+  'Cross-Origin-Embedder-Policy': 'require-corp',
+};
+
 // https://vite.dev/config/
 export default defineConfig({
   base: '/',
+  server: {
+    headers: crossOriginIsolationHeaders,
+  },
+  preview: {
+    headers: crossOriginIsolationHeaders,
+  },
   plugins: [
     tailwindcss(), 
     vue(),
     {
       name: 'onnx-wasm-plugin',
       configureServer(server) {
+        server.middlewares.use((req, res, next) => {
+          for (const [name, value] of Object.entries(crossOriginIsolationHeaders)) {
+            res.setHeader(name, value);
+          }
+          next();
+        });
+
         // Local development API middleware - only active in dev mode
         // This middleware intercepts /api requests and serves from local filesystem
         // In production, requests will pass through to Cloudflare Pages Functions
