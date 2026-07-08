@@ -1,4 +1,5 @@
 import { PiperTTS, TextSplitterStream } from "../lib/piper-tts.js";
+import { getVietnameseModelUrls } from "../config.js";
 
 let tts = null;
 
@@ -8,12 +9,7 @@ async function initializeModel(modelName = null) {
     // Default to the original model if no model name provided
     const defaultModel = 'en_US-libritts_r-medium';
     const model = modelName || defaultModel;
-    // Encode to handle spaces or special characters in filenames
-    const encodedModel = encodeURIComponent(model);
-    
-    // Construct paths - use API endpoint to fetch from R2
-    const modelPath = `/api/model/${encodedModel}.onnx`;
-    const configPath = `/api/model/${encodedModel}.onnx.json`;
+    const { modelPath, configPath } = getVietnameseModelUrls(model);
     
     tts = await PiperTTS.from_pretrained(modelPath, configPath);
     

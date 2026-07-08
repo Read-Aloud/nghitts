@@ -4,6 +4,17 @@
  * - Production: models from /api/model/piper/{lang}/
  */
 
+export const VI_ONNX_MODEL_BASE_URL = 'https://huggingface.co/doof-ferb/nghitts-copy/resolve/main/piper-tts/';
+
+export function getVietnameseModelUrls(modelName) {
+  const encodedModel = encodeURIComponent(modelName);
+
+  return {
+    modelPath: `${VI_ONNX_MODEL_BASE_URL}${encodedModel}.onnx`,
+    configPath: `${VI_ONNX_MODEL_BASE_URL}config.json`,
+  };
+}
+
 export function getModelBaseUrl(lang) {
   if (import.meta.env.PROD) {
     return `/api/model/piper/${lang}/`;
