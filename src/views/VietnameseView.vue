@@ -14,7 +14,7 @@ import ModelSelector from '../components/ModelSelector.vue';
 import DemoTable from '../components/DemoTable.vue';
 import { fetchAvailableModels } from '../utils/model-detector.js';
 import { addEntry } from '../utils/history-store.js';
-import { DEFAULT_MODEL, getVietnameseModelUrls } from '../config.js';
+import { getVietnameseModelUrls } from '../config.js';
 import { areUrlsCached, installUrls, removeUrls } from '../utils/model-cache.js';
 
 // State variables
@@ -287,14 +287,6 @@ const fetchModels = async () => {
       resetLoadedVoice();
     }
 
-    // Auto-load default model only when it has been explicitly installed.
-    if (selectedModel.value === "None" && installed.length > 0) {
-      const defaultModel = (DEFAULT_MODEL.vi && installed.includes(DEFAULT_MODEL.vi))
-        ? DEFAULT_MODEL.vi
-        : installed[0];
-      selectedModel.value = defaultModel;
-      restartWorker(defaultModel);
-    }
   } catch (err) {
     console.error('Failed to fetch models:', err);
     error.value = `Failed to load models: ${err.message}`;
@@ -439,8 +431,11 @@ onUnmounted(() => {
           <div v-else-if="error" class="p-3 bg-red-50 dark:bg-red-900/20 text-red-600 dark:text-red-400 rounded-lg text-sm">
             {{ error }}
           </div>
-          <div v-else-if="selectedModel === 'None'" class="p-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg text-sm">
+          <div v-else-if="selectedModel === 'None' && installedModels.length === 0" class="p-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg text-sm">
             Install a Vietnamese voice to start using TTS
+          </div>
+          <div v-else-if="selectedModel === 'None'" class="p-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg text-sm">
+            Select a Vietnamese voice to start using TTS
           </div>
           <div v-else-if="!voices && status === 'loading'" class="w-full flex items-center gap-3">
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">Loading model</span>
