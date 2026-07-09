@@ -1,6 +1,6 @@
 <script setup>
-import { ref } from 'vue';
-import { RouterView } from 'vue-router';
+import { computed, ref } from 'vue';
+import { RouterView, useRoute } from 'vue-router';
 import ThemeToggle from './components/ThemeToggle.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
 import { History } from 'lucide-vue-next';
@@ -8,6 +8,12 @@ import { History } from 'lucide-vue-next';
 const shareCopied = ref(false);
 let shareFeedbackTimer = null;
 const historyOpen = ref(false);
+const route = useRoute();
+
+const hideModeNav = computed(() => {
+  const { embed, hideModeNav } = route.query;
+  return embed === '1' || embed === 'true' || hideModeNav === '1' || hideModeNav === 'true';
+});
 
 function copyShareLink() {
   const url = window.location.href;
@@ -60,7 +66,10 @@ function copyShareLink() {
     </header>
 
     <!-- Mode / Page tabs: TTS by language or ASR (not UI language) -->
-    <div class="bg-white/50 dark:bg-gray-900/50 border-b border-gray-200/50 dark:border-gray-700/50">
+    <div
+      v-if="!hideModeNav"
+      class="bg-white/50 dark:bg-gray-900/50 border-b border-gray-200/50 dark:border-gray-700/50"
+    >
       <div class="max-w-4xl mx-auto px-4 py-2">
         <p class="text-xs font-medium text-gray-500 dark:text-gray-400 mb-2 uppercase tracking-wide">Chế độ / Mode</p>
         <nav class="flex flex-wrap items-center gap-2 text-sm" role="tablist" aria-label="Chọn chế độ TTS hoặc ASR">
