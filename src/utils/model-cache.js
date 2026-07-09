@@ -3,7 +3,7 @@ class ModelCache {
   constructor() {
     this.dbName = 'piper-tts-cache';
     this.storeName = 'models';
-    this.version = 2; // Increment version to trigger upgrade
+    this.version = 3; // Increment version to trigger upgrade
     this.db = null;
   }
 
@@ -21,15 +21,18 @@ class ModelCache {
 
       request.onupgradeneeded = (event) => {
         const db = event.target.result;
+        let store;
         if (!db.objectStoreNames.contains(this.storeName)) {
-          const store = db.createObjectStore(this.storeName, { keyPath: 'url' });
-          store.createIndex('timestamp', 'timestamp', { unique: false });
+          store = db.createObjectStore(this.storeName, { keyPath: 'url' });
         } else {
-          // Upgrade existing store - add contentHash field if needed
-          const store = event.target.transaction.objectStore(this.storeName);
-          if (!store.indexNames.contains('contentHash')) {
-            store.createIndex('contentHash', 'contentHash', { unique: false });
-          }
+          store = event.target.transaction.objectStore(this.storeName);
+        }
+
+        if (!store.indexNames.contains('timestamp')) {
+          store.createIndex('timestamp', 'timestamp', { unique: false });
+        }
+        if (!store.indexNames.contains('contentHash')) {
+          store.createIndex('contentHash', 'contentHash', { unique: false });
         }
       };
     });
@@ -67,19 +70,12 @@ class ModelCache {
       request.onsuccess = () => {
         const result = request.result;
         if (result) {
-          // Check if cache is still valid (7 days)
-          const maxAge = 7 * 24 * 60 * 60 * 1000; // 7 days in milliseconds
-          if (Date.now() - result.timestamp < maxAge) {
-            // Return cached data with its hash for comparison
-            resolve({
-              data: result.data,
-              contentHash: result.contentHash || null
-            });
-            return;
-          } else {
-            // Cache expired, remove it
-            this.delete(url);
-          }
+          resolve({
+            data: result.data,
+            contentHash: result.contentHash || null,
+            timestamp: result.timestamp || null,
+          });
+          return;
         }
         resolve(null);
       };
@@ -131,50 +127,102 @@ class ModelCache {
   }
 }
 
-// Cached fetch function for model files
-export async function cachedFetch(url) {
+export async function isCached(url) {
   const cache = new ModelCache();
-  
-  // Try to get from cache first
-  const cached = await cache.get(url);
-  
-  // Fetch from network to check if content has changed
+  return Boolean(await cache.get(url));
+}
+
+export async function areUrlsCached(urls) {
+  const results = await Promise.all(urls.map((url) => isCached(url)));
+  return results.every(Boolean);
+}
+
+async function downloadToCache(url, onProgress) {
+  const cache = new ModelCache();
   const response = await fetch(url);
   if (!response.ok) {
     throw new Error(`HTTP error! status: ${response.status}`);
   }
 
-  // Get the new file data
-  const data = await response.arrayBuffer();
-  
-  // Calculate hash of the new content
-  const newContentHash = await cache.calculateContentHash(data);
-  
-  // Check if we have cached data and if content has changed
-  if (cached) {
-    if (cached.contentHash === newContentHash) {
-      // Content is the same - use cached version
-      return new Response(cached.data, {
-        status: response.status,
-        statusText: response.statusText,
-        headers: response.headers
-      });
-    } else {
-      // Content has changed - update cache with new content
-      console.log(`🔄 Model file changed: ${url} - updating cache`);
-      await cache.set(url, data, newContentHash);
+  const contentLength = Number(response.headers.get('content-length')) || 0;
+  let data;
+
+  if (response.body?.getReader) {
+    const reader = response.body.getReader();
+    const chunks = [];
+    let received = 0;
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      chunks.push(value);
+      received += value.byteLength;
+      onProgress?.({ url, received, total: contentLength });
     }
+
+    data = new Uint8Array(received);
+    let offset = 0;
+    for (const chunk of chunks) {
+      data.set(chunk, offset);
+      offset += chunk.byteLength;
+    }
+    data = data.buffer;
   } else {
-    // No cache - store new content
-    await cache.set(url, data, newContentHash);
+    data = await response.arrayBuffer();
+    onProgress?.({ url, received: data.byteLength, total: contentLength });
   }
-  
-  // Return the new response with the data
+
+  const contentHash = await cache.calculateContentHash(data);
+  await cache.set(url, data, contentHash);
+  onProgress?.({ url, received: data.byteLength, total: contentLength || data.byteLength });
+
   return new Response(data, {
     status: response.status,
     statusText: response.statusText,
     headers: response.headers
   });
+}
+
+export async function installUrls(urls, onProgress) {
+  let completedBytes = 0;
+  let totalBytes = 0;
+  const progressByUrl = new Map();
+
+  const reportProgress = (progress) => {
+    const previous = progressByUrl.get(progress.url) || { received: 0, total: 0 };
+    completedBytes += progress.received - previous.received;
+    totalBytes += progress.total - previous.total;
+    progressByUrl.set(progress.url, progress);
+
+    onProgress?.({
+      url: progress.url,
+      received: completedBytes,
+      total: totalBytes,
+      percent: totalBytes > 0 ? Math.min(100, (completedBytes / totalBytes) * 100) : null,
+    });
+  };
+
+  for (const url of urls) {
+    await downloadToCache(url, reportProgress);
+  }
+}
+
+export async function removeUrls(urls) {
+  const cache = new ModelCache();
+  await Promise.all(urls.map((url) => cache.delete(url)));
+}
+
+// Cached fetch function for model files
+export async function cachedFetch(url) {
+  const cache = new ModelCache();
+  const cached = await cache.get(url);
+
+  if (cached) {
+    return new Response(cached.data, { status: 200 });
+  }
+
+  return downloadToCache(url);
 }
 
 export default ModelCache;

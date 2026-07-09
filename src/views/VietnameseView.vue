@@ -14,7 +14,8 @@ import ModelSelector from '../components/ModelSelector.vue';
 import DemoTable from '../components/DemoTable.vue';
 import { fetchAvailableModels } from '../utils/model-detector.js';
 import { addEntry } from '../utils/history-store.js';
-import { DEFAULT_MODEL } from '../config.js';
+import { DEFAULT_MODEL, getVietnameseModelUrls } from '../config.js';
+import { areUrlsCached, installUrls, removeUrls } from '../utils/model-cache.js';
 
 // State variables
 const text = ref(
@@ -33,9 +34,14 @@ const selectedVoice = ref(0);
 const chunks = ref([]);
 const result = ref(null);
 const availableModels = ref([]);
+const installedModels = ref([]);
 const selectedModel = ref("None");
 const modelsLoading = ref(false);
 const loadingProgress = ref(0);
+const installingModels = ref({});
+const installProgress = ref({});
+const installProgressDetails = ref({});
+const voiceManagerMessage = ref("");
 
 // Computed properties
 const processed = computed(() => {
@@ -48,6 +54,49 @@ const processed = computed(() => {
 // Methods
 const setSpeed = (newSpeed) => {
   speed.value = newSpeed;
+};
+
+const getModelUrls = (modelName) => {
+  const { modelPath, configPath } = getVietnameseModelUrls(modelName);
+  return [modelPath, configPath];
+};
+
+const isModelInstalled = (modelName) => installedModels.value.includes(modelName);
+
+const isInstalling = (modelName) => Boolean(installingModels.value[modelName]);
+
+const getInstallProgress = (modelName) => installProgress.value[modelName] || 0;
+
+const getInstallProgressDetails = (modelName) => installProgressDetails.value[modelName] || null;
+
+const formatBytes = (bytes) => {
+  if (!Number.isFinite(bytes) || bytes <= 0) return "";
+
+  const units = ["B", "KB", "MB", "GB"];
+  let value = bytes;
+  let unitIndex = 0;
+
+  while (value >= 1024 && unitIndex < units.length - 1) {
+    value /= 1024;
+    unitIndex++;
+  }
+
+  const precision = value >= 10 || unitIndex === 0 ? 0 : 1;
+  return `${value.toFixed(precision)} ${units[unitIndex]}`;
+};
+
+const resetLoadedVoice = () => {
+  if (worker.value) {
+    worker.value.terminate();
+    worker.value = null;
+  }
+  status.value = "idle";
+  voices.value = null;
+  chunks.value = [];
+  result.value = null;
+  lastGeneration.value = null;
+  isPlaying.value = false;
+  currentChunkIndex.value = -1;
 };
 
 const restartWorker = (modelName = null) => {
@@ -84,6 +133,90 @@ const restartWorker = (modelName = null) => {
   worker.value.postMessage({ type: 'init', model: modelToLoad });
 
   worker.value._progressInterval = progressInterval;
+};
+
+const refreshInstalledModels = async (models = availableModels.value) => {
+  const installed = [];
+
+  for (const model of models) {
+    if (await areUrlsCached(getModelUrls(model))) {
+      installed.push(model);
+    }
+  }
+
+  installedModels.value = installed;
+
+  if (selectedModel.value !== "None" && !installed.includes(selectedModel.value)) {
+    selectedModel.value = "None";
+    resetLoadedVoice();
+  }
+
+  return installed;
+};
+
+const installModel = async (modelName) => {
+  if (isModelInstalled(modelName) || isInstalling(modelName)) return;
+
+  error.value = null;
+  voiceManagerMessage.value = "";
+  installingModels.value = { ...installingModels.value, [modelName]: true };
+  installProgress.value = { ...installProgress.value, [modelName]: 0 };
+  installProgressDetails.value = { ...installProgressDetails.value, [modelName]: null };
+
+  try {
+    await installUrls(getModelUrls(modelName), ({ percent, received, total }) => {
+      if (percent !== null) {
+        installProgress.value = {
+          ...installProgress.value,
+          [modelName]: Math.round(percent),
+        };
+      }
+      installProgressDetails.value = {
+        ...installProgressDetails.value,
+        [modelName]: total > 0
+          ? `${formatBytes(received)} / ${formatBytes(total)}`
+          : formatBytes(received),
+      };
+    });
+
+    installProgress.value = { ...installProgress.value, [modelName]: 100 };
+    await refreshInstalledModels();
+    voiceManagerMessage.value = `${modelName} installed.`;
+
+    if (selectedModel.value === "None") {
+      selectedModel.value = modelName;
+      restartWorker(modelName);
+    }
+  } catch (err) {
+    console.error(`Failed to install model ${modelName}:`, err);
+    error.value = `Failed to install ${modelName}: ${err.message}`;
+  } finally {
+    const { [modelName]: _installing, ...remainingInstalling } = installingModels.value;
+    installingModels.value = remainingInstalling;
+    const { [modelName]: _details, ...remainingDetails } = installProgressDetails.value;
+    installProgressDetails.value = remainingDetails;
+  }
+};
+
+const uninstallModel = async (modelName) => {
+  if (!isModelInstalled(modelName) || isInstalling(modelName)) return;
+
+  const confirmed = window.confirm(`Remove "${modelName}" from this browser? You can install it again later.`);
+  if (!confirmed) return;
+
+  error.value = null;
+  voiceManagerMessage.value = "";
+
+  try {
+    await removeUrls(getModelUrls(modelName));
+    const { [modelName]: _progress, ...remainingProgress } = installProgress.value;
+    installProgress.value = remainingProgress;
+    await refreshInstalledModels();
+    voiceManagerMessage.value = `${modelName} removed. Install or select another voice to continue.`;
+  } catch (err) {
+    console.error(`Failed to uninstall model ${modelName}:`, err);
+    error.value = `Failed to uninstall ${modelName}: ${err.message}`;
+  }
 };
 
 const setCurrentChunkIndex = (index) => {
@@ -147,22 +280,18 @@ const fetchModels = async () => {
   try {
     const models = await fetchAvailableModels();
     availableModels.value = models;
+    const installed = await refreshInstalledModels(models);
 
-    if (selectedModel.value && selectedModel.value !== "None" && !models.includes(selectedModel.value)) {
+    if (selectedModel.value && selectedModel.value !== "None" && !installed.includes(selectedModel.value)) {
       selectedModel.value = "None";
-      if (worker.value) {
-        worker.value.terminate();
-        worker.value = null;
-        status.value = "loading";
-        voices.value = null;
-      }
+      resetLoadedVoice();
     }
 
-    // Auto-load default model when entering page
-    if (selectedModel.value === "None" && models.length > 0) {
-      const defaultModel = (DEFAULT_MODEL.vi && models.includes(DEFAULT_MODEL.vi))
+    // Auto-load default model only when it has been explicitly installed.
+    if (selectedModel.value === "None" && installed.length > 0) {
+      const defaultModel = (DEFAULT_MODEL.vi && installed.includes(DEFAULT_MODEL.vi))
         ? DEFAULT_MODEL.vi
-        : models[0];
+        : installed[0];
       selectedModel.value = defaultModel;
       restartWorker(defaultModel);
     }
@@ -179,17 +308,7 @@ const handleModelChange = (modelName) => {
     selectedModel.value = modelName;
 
     if (modelName === "None") {
-      if (worker.value) {
-        worker.value.terminate();
-        worker.value = null;
-      }
-      status.value = "loading";
-      voices.value = null;
-      chunks.value = [];
-      result.value = null;
-      lastGeneration.value = null;
-      isPlaying.value = false;
-      currentChunkIndex.value = -1;
+      resetLoadedVoice();
     } else {
       restartWorker(modelName);
     }
@@ -294,12 +413,12 @@ onUnmounted(() => {
 
         <!-- Controls Section -->
         <div class="space-y-4">
-          <div v-if="availableModels.length > 0" class="flex items-center">
+          <div v-if="installedModels.length > 0" class="flex items-center">
             <label class="text-sm font-medium text-gray-700 dark:text-gray-300 mr-2">
-              Model:
+              Voice:
             </label>
             <ModelSelector
-              :models="availableModels"
+              :models="installedModels"
               :selected-model="selectedModel"
               @model-change="handleModelChange"
             />
@@ -321,7 +440,7 @@ onUnmounted(() => {
             {{ error }}
           </div>
           <div v-else-if="selectedModel === 'None'" class="p-3 bg-blue-50 dark:bg-blue-900/20 text-blue-600 dark:text-blue-400 rounded-lg text-sm">
-            Please select a model to start using TTS
+            Install a Vietnamese voice to start using TTS
           </div>
           <div v-else-if="!voices && status === 'loading'" class="w-full flex items-center gap-3">
             <span class="text-sm font-medium text-gray-700 dark:text-gray-300 whitespace-nowrap">Loading model</span>
@@ -377,6 +496,88 @@ onUnmounted(() => {
             @pause="() => { if (currentChunkIndex === index) setIsPlaying(false) }"
             @end="handleChunkEnd"
           />
+        </div>
+      </div>
+    </div>
+
+    <!-- Voice Install Card -->
+    <div
+      v-if="availableModels.length > 0"
+      class="mt-6 bg-white/70 dark:bg-gray-900/70 backdrop-blur-xl rounded-2xl shadow-xl border border-white/20 dark:border-gray-700/50 overflow-hidden"
+    >
+      <div class="p-6 space-y-3">
+        <div class="flex items-center justify-between">
+          <h2 class="text-sm font-semibold text-gray-800 dark:text-gray-200">
+            Manage voices
+          </h2>
+          <span class="text-xs text-gray-500 dark:text-gray-400">
+            {{ installedModels.length }} installed
+          </span>
+        </div>
+
+        <div
+          v-if="voiceManagerMessage"
+          class="rounded-lg bg-blue-50 dark:bg-blue-900/20 px-3 py-2 text-sm text-blue-700 dark:text-blue-300"
+        >
+          {{ voiceManagerMessage }}
+        </div>
+
+        <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
+          <div
+            v-for="model in availableModels"
+            :key="model"
+            class="border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-white/60 dark:bg-gray-800/60 space-y-2"
+          >
+            <div class="flex items-center justify-between gap-3">
+              <div class="min-w-0">
+                <div class="font-medium text-gray-800 dark:text-gray-100 truncate">
+                  {{ model }}
+                </div>
+                <div class="mt-1 flex items-center gap-2 text-xs">
+                  <span
+                    v-if="isModelInstalled(model)"
+                    class="rounded-full bg-green-100 px-2 py-0.5 font-medium text-green-700 dark:bg-green-900/30 dark:text-green-300"
+                  >
+                    Installed
+                  </span>
+                  <span
+                    v-else
+                    class="text-gray-500 dark:text-gray-400"
+                  >
+                    Not installed
+                  </span>
+                </div>
+              </div>
+
+              <button
+                class="shrink-0 px-3 py-2 rounded-lg text-sm font-medium transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                :class="isModelInstalled(model)
+                  ? 'border border-red-300 bg-white text-red-600 hover:bg-red-50 dark:border-red-800 dark:bg-gray-900 dark:text-red-400 dark:hover:bg-red-950/30'
+                  : 'bg-blue-800 text-white hover:bg-blue-900'"
+                :disabled="isInstalling(model)"
+                @click="isModelInstalled(model) ? uninstallModel(model) : installModel(model)"
+              >
+                <span v-if="isModelInstalled(model)">Remove</span>
+                <span v-else-if="isInstalling(model)">Installing {{ getInstallProgress(model) }}%</span>
+                <span v-else>Install</span>
+              </button>
+            </div>
+
+            <div v-if="isInstalling(model)" class="space-y-1">
+              <div class="h-2 bg-gray-200 dark:bg-gray-700 rounded-full overflow-hidden">
+                <div
+                  class="h-full bg-blue-700 transition-all duration-200"
+                  :style="{ width: `${getInstallProgress(model)}%` }"
+                ></div>
+              </div>
+              <div
+                v-if="getInstallProgressDetails(model)"
+                class="text-xs text-gray-500 dark:text-gray-400"
+              >
+                {{ getInstallProgressDetails(model) }}
+              </div>
+            </div>
+          </div>
         </div>
       </div>
     </div>
