@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, onUnmounted, computed } from 'vue';
+import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import {
   DownloadIcon,
   PauseIcon,
@@ -42,6 +42,10 @@ const installingModels = ref({});
 const installProgress = ref({});
 const installProgressDetails = ref({});
 const voiceManagerMessage = ref("");
+const embeddedSentenceRanges = ref([]);
+const embeddedSpeakActive = ref(false);
+let modelReadyResolve = null;
+let modelReadyReject = null;
 
 // Computed properties
 const processed = computed(() => {
@@ -50,6 +54,69 @@ const processed = computed(() => {
       lastGeneration.value.speed === speed.value &&
       lastGeneration.value.voice === selectedVoice.value;
 });
+
+const isEmbedded = () => window.parent !== window;
+
+const postToParent = (message) => {
+  if (!isEmbedded()) return;
+  window.parent.postMessage(message, "*");
+};
+
+const advertiseVoices = () => {
+  postToParent({
+    type: "advertise",
+    voices: installedModels.value.map((model) => ({
+      id: model,
+      name: model,
+    })),
+  });
+};
+
+const getSentenceRanges = (input) => {
+  const ranges = [];
+  const sentencePattern = /\S[\s\S]*?(?:[.!?](?=\s|$)|$)/g;
+  let match;
+
+  while ((match = sentencePattern.exec(input)) !== null) {
+    const value = match[0];
+    const leadingWhitespace = value.match(/^\s*/)?.[0].length || 0;
+    const trailingWhitespace = value.match(/\s*$/)?.[0].length || 0;
+    const startIndex = match.index + leadingWhitespace;
+    const endIndex = match.index + value.length - trailingWhitespace;
+
+    if (startIndex < endIndex) {
+      ranges.push({ startIndex, endIndex });
+    }
+
+    if (match.index === sentencePattern.lastIndex) {
+      sentencePattern.lastIndex++;
+    }
+  }
+
+  return ranges;
+};
+
+const postEmbeddedError = (message) => {
+  if (!embeddedSpeakActive.value) return;
+  postToParent({ type: "onError", message });
+  embeddedSpeakActive.value = false;
+};
+
+const waitForModelReady = () => new Promise((resolve, reject) => {
+  modelReadyResolve = resolve;
+  modelReadyReject = reject;
+});
+
+const clearModelReadyWaiter = () => {
+  modelReadyResolve = null;
+  modelReadyReject = null;
+};
+
+const rejectModelReadyWaiter = (reason) => {
+  if (!modelReadyReject) return;
+  modelReadyReject(reason);
+  clearModelReadyWaiter();
+};
 
 // Methods
 const setSpeed = (newSpeed) => {
@@ -90,6 +157,7 @@ const resetLoadedVoice = () => {
     worker.value.terminate();
     worker.value = null;
   }
+  rejectModelReadyWaiter(new Error("Model load cancelled"));
   status.value = "idle";
   voices.value = null;
   chunks.value = [];
@@ -103,6 +171,7 @@ const restartWorker = (modelName = null) => {
   if (worker.value) {
     worker.value.terminate();
   }
+  rejectModelReadyWaiter(new Error("Model load cancelled"));
 
   // Reset all audio and UI state
   status.value = "loading";
@@ -133,6 +202,8 @@ const restartWorker = (modelName = null) => {
   worker.value.postMessage({ type: 'init', model: modelToLoad });
 
   worker.value._progressInterval = progressInterval;
+
+  return waitForModelReady();
 };
 
 const refreshInstalledModels = async (models = availableModels.value) => {
@@ -185,7 +256,11 @@ const installModel = async (modelName) => {
 
     if (selectedModel.value === "None") {
       selectedModel.value = modelName;
-      restartWorker(modelName);
+      restartWorker(modelName).catch((err) => {
+        if (err.message !== "Model load cancelled") {
+          console.error("Failed to restart worker:", err);
+        }
+      });
     }
   } catch (err) {
     console.error(`Failed to install model ${modelName}:`, err);
@@ -231,6 +306,10 @@ const handleChunkEnd = () => {
   if (status.value !== "generating" && currentChunkIndex.value === chunks.value.length - 1) {
     isPlaying.value = false;
     currentChunkIndex.value = -1;
+    if (embeddedSpeakActive.value) {
+      postToParent({ type: "onEnd" });
+      embeddedSpeakActive.value = false;
+    }
   } else {
     currentChunkIndex.value = currentChunkIndex.value + 1;
   }
@@ -302,8 +381,123 @@ const handleModelChange = (modelName) => {
     if (modelName === "None") {
       resetLoadedVoice();
     } else {
-      restartWorker(modelName);
+      restartWorker(modelName).catch((err) => {
+        if (err.message !== "Model load cancelled") {
+          console.error("Failed to restart worker:", err);
+        }
+      });
     }
+  }
+};
+
+const startEmbeddedSpeech = async ({ text: requestedText, voice }) => {
+  if (!isEmbedded()) return;
+
+  const modelName = typeof voice === "string" ? voice : selectedModel.value;
+  if (!requestedText || typeof requestedText !== "string") {
+    postToParent({ type: "onError", message: "Missing text" });
+    return;
+  }
+  if (!modelName || modelName === "None") {
+    postToParent({ type: "onError", message: "Missing voice" });
+    return;
+  }
+  if (!installedModels.value.includes(modelName)) {
+    postToParent({ type: "onError", message: `Voice not installed: ${modelName}` });
+    return;
+  }
+
+  try {
+    if (selectedModel.value !== modelName || status.value !== "ready") {
+      selectedModel.value = modelName;
+      await restartWorker(modelName);
+    }
+
+    text.value = requestedText;
+    const sentenceRanges = getSentenceRanges(requestedText);
+    embeddedSentenceRanges.value = sentenceRanges;
+    embeddedSpeakActive.value = true;
+    postToParent({
+      type: "onStart",
+      sentenceStartIndices: sentenceRanges.map(({ startIndex }) => startIndex),
+    });
+
+    status.value = "generating";
+    chunks.value = [];
+    result.value = null;
+    currentChunkIndex.value = 0;
+    isPlaying.value = true;
+    const params = {
+      text: requestedText,
+      voice: selectedVoice.value,
+      speed: speed.value
+    };
+    lastGeneration.value = params;
+    worker.value?.postMessage(params);
+  } catch (err) {
+    postToParent({ type: "onError", message: err.message || String(err) });
+    embeddedSpeakActive.value = false;
+  }
+};
+
+const pauseEmbeddedSpeech = () => {
+  if (!isEmbedded()) return;
+  isPlaying.value = false;
+};
+
+const resumeEmbeddedSpeech = () => {
+  if (!isEmbedded()) return;
+  if (chunks.value.length === 0) return;
+  if (currentChunkIndex.value === -1) {
+    currentChunkIndex.value = 0;
+  }
+  isPlaying.value = true;
+};
+
+const seekEmbeddedSentence = (index) => {
+  if (!isEmbedded()) return;
+  if (chunks.value.length === 0) return;
+  const numericIndex = Number(index);
+  if (!Number.isInteger(numericIndex)) return;
+
+  const nextIndex = Math.min(
+    Math.max(numericIndex, 0),
+    chunks.value.length - 1
+  );
+
+  if (nextIndex === currentChunkIndex.value) return;
+  currentChunkIndex.value = nextIndex;
+  isPlaying.value = true;
+};
+
+const skipEmbeddedSentence = (direction) => {
+  const currentIndex = currentChunkIndex.value === -1 ? 0 : currentChunkIndex.value;
+  seekEmbeddedSentence(currentIndex + direction);
+};
+
+const onParentMessage = (event) => {
+  if (!isEmbedded()) return;
+  if (event.source !== window.parent) return;
+
+  switch (event.data?.type) {
+    case "speak":
+      startEmbeddedSpeech(event.data);
+      break;
+    case "pause":
+      pauseEmbeddedSpeech();
+      break;
+    case "resume":
+      resumeEmbeddedSpeech();
+      break;
+    case "forward":
+      skipEmbeddedSentence(1);
+      break;
+    case "rewind":
+      skipEmbeddedSentence(-1);
+      break;
+    case "seek":
+      seekEmbeddedSentence(event.data.index);
+      break;
   }
 };
 
@@ -320,6 +514,10 @@ const onMessageReceived = ({ data }) => {
         loadingProgress.value = 0;
       }, 300);
       voices.value = data.voices;
+      if (modelReadyResolve) {
+        modelReadyResolve(data.voices);
+        clearModelReadyWaiter();
+      }
       break;
     case "error":
       if (worker.value?._progressInterval) {
@@ -328,6 +526,8 @@ const onMessageReceived = ({ data }) => {
       loadingProgress.value = 0;
       status.value = "error";
       error.value = data.data;
+      rejectModelReadyWaiter(new Error(data.data));
+      postEmbeddedError(data.data);
       break;
     case "stream":
       chunks.value = [...chunks.value, data.chunk];
@@ -361,16 +561,38 @@ const onMessageReceived = ({ data }) => {
 const onErrorReceived = (e) => {
   console.error("Worker error:", e);
   error.value = e.message;
+  rejectModelReadyWaiter(new Error(e.message));
+  postEmbeddedError(e.message);
 };
 
+const handleAudioChunkStart = (index) => {
+  setCurrentChunkIndex(index);
+  if (!embeddedSpeakActive.value) return;
+
+  const range = embeddedSentenceRanges.value[index];
+  if (range) {
+    postToParent({
+      type: "onSentence",
+      startIndex: range.startIndex,
+      endIndex: range.endIndex,
+    });
+  }
+};
+
+watch(installedModels, advertiseVoices);
+
 onMounted(async () => {
+  window.addEventListener("message", onParentMessage);
   await fetchModels();
+  advertiseVoices();
 });
 
 onUnmounted(() => {
+  window.removeEventListener("message", onParentMessage);
   if (worker.value) {
     worker.value.terminate();
   }
+  rejectModelReadyWaiter(new Error("View unmounted"));
 });
 </script>
 
@@ -486,8 +708,9 @@ onUnmounted(() => {
             :audio="chunk.audio"
             :active="currentChunkIndex === index"
             :playing="isPlaying"
+            reset-when-inactive
             class="hidden"
-            @start="() => setCurrentChunkIndex(index)"
+            @start="() => handleAudioChunkStart(index)"
             @pause="() => { if (currentChunkIndex === index) setIsPlaying(false) }"
             @end="handleChunkEnd"
           />

@@ -1,0 +1,304 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>NGHI-TTS Parent Frame Test</title>
+    <style>
+      * {
+        box-sizing: border-box;
+      }
+
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+        background: #f5f7fb;
+        color: #172033;
+      }
+
+      main {
+        display: grid;
+        grid-template-columns: minmax(320px, 420px) minmax(0, 1fr);
+        min-height: 100vh;
+      }
+
+      aside {
+        border-right: 1px solid #d8dfeb;
+        background: #fff;
+        padding: 20px;
+        overflow: auto;
+      }
+
+      iframe {
+        width: 100%;
+        height: 100vh;
+        border: 0;
+        background: #fff;
+      }
+
+      h1 {
+        margin: 0 0 8px;
+        font-size: 22px;
+      }
+
+      p {
+        margin: 0 0 18px;
+        color: #536173;
+        line-height: 1.45;
+      }
+
+      label {
+        display: block;
+        margin: 14px 0 6px;
+        font-size: 13px;
+        font-weight: 650;
+        color: #334155;
+      }
+
+      select,
+      input,
+      textarea,
+      button {
+        width: 100%;
+        border-radius: 8px;
+        border: 1px solid #cbd5e1;
+        font: inherit;
+      }
+
+      select,
+      input,
+      textarea {
+        padding: 10px;
+        background: #fff;
+      }
+
+      textarea {
+        min-height: 140px;
+        resize: vertical;
+        line-height: 1.45;
+      }
+
+      button {
+        margin-top: 14px;
+        padding: 11px 14px;
+        border: 0;
+        background: #1e40af;
+        color: #fff;
+        font-weight: 700;
+        cursor: pointer;
+      }
+
+      button:disabled {
+        cursor: not-allowed;
+        opacity: 0.55;
+      }
+
+      .button-row {
+        display: grid;
+        grid-template-columns: 1fr 1fr;
+        gap: 10px;
+      }
+
+      .button-row button {
+        background: #475569;
+      }
+
+      pre {
+        min-height: 220px;
+        max-height: 42vh;
+        overflow: auto;
+        margin: 16px 0 0;
+        padding: 12px;
+        border-radius: 8px;
+        background: #0f172a;
+        color: #dbeafe;
+        font-size: 12px;
+        white-space: pre-wrap;
+      }
+
+      .status {
+        margin-top: 12px;
+        padding: 10px;
+        border-radius: 8px;
+        background: #eff6ff;
+        color: #1d4ed8;
+        font-size: 13px;
+      }
+
+      @media (max-width: 800px) {
+        main {
+          grid-template-columns: 1fr;
+        }
+
+        iframe {
+          height: 720px;
+          border-top: 1px solid #d8dfeb;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <aside>
+        <h1>Parent Frame Test</h1>
+        <p>
+          This page embeds the Vietnamese TTS view and exercises the parent
+          messaging API.
+        </p>
+
+        <label for="voice">Advertised voice</label>
+        <select id="voice">
+          <option value="">Waiting for advertise...</option>
+        </select>
+
+        <label for="text">Text</label>
+        <textarea id="text">Xin chào. Đây là trang kiểm thử parent frame. Mỗi câu sẽ gửi một sự kiện onSentence.</textarea>
+
+        <button id="speak" type="button" disabled>Speak</button>
+        <div class="button-row">
+          <button id="pause" type="button">Pause</button>
+          <button id="resume" type="button">Resume</button>
+        </div>
+        <div class="button-row">
+          <button id="rewind" type="button">Rewind</button>
+          <button id="forward" type="button">Forward</button>
+        </div>
+
+        <label for="seek-index">Sentence index</label>
+        <div class="button-row">
+          <input id="seek-index" type="number" min="0" step="1" value="0" />
+          <button id="seek" type="button">Seek</button>
+        </div>
+
+        <div id="status" class="status">No messages yet.</div>
+        <pre id="log"></pre>
+      </aside>
+
+      <iframe
+        id="child"
+        src="/?embed=1"
+        title="Embedded NGHI-TTS Vietnamese view"
+      ></iframe>
+    </main>
+
+    <script>
+      const child = document.getElementById("child");
+      const voiceSelect = document.getElementById("voice");
+      const textInput = document.getElementById("text");
+      const speakButton = document.getElementById("speak");
+      const pauseButton = document.getElementById("pause");
+      const resumeButton = document.getElementById("resume");
+      const rewindButton = document.getElementById("rewind");
+      const forwardButton = document.getElementById("forward");
+      const seekIndexInput = document.getElementById("seek-index");
+      const seekButton = document.getElementById("seek");
+      const statusEl = document.getElementById("status");
+      const logEl = document.getElementById("log");
+      let voices = [];
+
+      function log(message, payload) {
+        const time = new Date().toLocaleTimeString();
+        logEl.textContent += `[${time}] ${message} ${JSON.stringify(payload)}\n`;
+        logEl.scrollTop = logEl.scrollHeight;
+      }
+
+      function setStatus(message) {
+        statusEl.textContent = message;
+      }
+
+      function renderVoices(nextVoices) {
+        voices = Array.isArray(nextVoices) ? nextVoices : [];
+        voiceSelect.replaceChildren();
+
+        if (voices.length === 0) {
+          voiceSelect.append(new Option("No Vietnamese voices advertised", ""));
+          speakButton.disabled = true;
+          return;
+        }
+
+        for (const voice of voices) {
+          voiceSelect.append(new Option(voice.name || voice.id, voice.id));
+        }
+        speakButton.disabled = false;
+      }
+
+      window.addEventListener("message", (event) => {
+        if (event.source !== child.contentWindow) return;
+
+        const data = event.data || {};
+        log("child -> parent", data);
+
+        switch (data.type) {
+          case "advertise":
+            renderVoices(data.voices);
+            setStatus(`Advertised ${voices.length} voice(s).`);
+            break;
+          case "onStart":
+            setStatus(`Started. Sentence starts: ${(data.sentenceStartIndices || []).join(", ")}`);
+            break;
+          case "onSentence":
+            setStatus(`Sentence: ${data.startIndex}-${data.endIndex}`);
+            break;
+          case "onEnd":
+            setStatus("Speech finished.");
+            break;
+          case "onError":
+            setStatus(`Error: ${data.message || "Unknown error"}`);
+            break;
+          default:
+            setStatus(`Unknown message: ${data.type || "(missing type)"}`);
+        }
+      });
+
+      speakButton.addEventListener("click", () => {
+        const message = {
+          type: "speak",
+          text: textInput.value,
+          voice: voiceSelect.value,
+        };
+
+        child.contentWindow.postMessage(message, window.location.origin);
+        log("parent -> child", message);
+        setStatus("Speak message sent.");
+      });
+
+      pauseButton.addEventListener("click", () => {
+        const message = { type: "pause" };
+        child.contentWindow.postMessage(message, window.location.origin);
+        log("parent -> child", message);
+        setStatus("Pause message sent.");
+      });
+
+      resumeButton.addEventListener("click", () => {
+        const message = { type: "resume" };
+        child.contentWindow.postMessage(message, window.location.origin);
+        log("parent -> child", message);
+        setStatus("Resume message sent.");
+      });
+
+      rewindButton.addEventListener("click", () => {
+        const message = { type: "rewind" };
+        child.contentWindow.postMessage(message, window.location.origin);
+        log("parent -> child", message);
+        setStatus("Rewind message sent.");
+      });
+
+      forwardButton.addEventListener("click", () => {
+        const message = { type: "forward" };
+        child.contentWindow.postMessage(message, window.location.origin);
+        log("parent -> child", message);
+        setStatus("Forward message sent.");
+      });
+
+      seekButton.addEventListener("click", () => {
+        const message = {
+          type: "seek",
+          index: Number(seekIndexInput.value),
+        };
+        child.contentWindow.postMessage(message, window.location.origin);
+        log("parent -> child", message);
+        setStatus("Seek message sent.");
+      });
+    </script>
+  </body>
+</html>

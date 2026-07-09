@@ -14,6 +14,10 @@ const props = defineProps({
     type: Boolean,
     required: true
   },
+  resetWhenInactive: {
+    type: Boolean,
+    default: false
+  },
   onStart: {
     type: Function,
     default: () => {}
@@ -41,12 +45,18 @@ const handlePause = () => {
 }
 
 // Watch for changes in active/playing state
-watch([() => props.active, () => props.playing], ([newActive, newPlaying]) => {
+watch([() => props.active, () => props.playing], ([newActive, newPlaying], [oldActive]) => {
   if (!audioRef.value) return;
-  if (!newActive) return;
+  if (!newActive) {
+    if (props.resetWhenInactive && oldActive) {
+      audioRef.value.pause();
+      audioRef.value.currentTime = 0;
+    }
+    return;
+  }
 
   if (newPlaying) {
-    if (audioRef.value.ended) {
+    if (!oldActive || audioRef.value.ended) {
       audioRef.value.currentTime = 0;
     }
     audioRef.value.play();
