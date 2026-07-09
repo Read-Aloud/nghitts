@@ -535,7 +535,7 @@ const onMessageReceived = ({ data }) => {
     case "complete":
       status.value = "ready";
       result.value = data.audio;
-      if (data.audio && lastGeneration.value && selectedModel.value) {
+      if (data.audio && lastGeneration.value && selectedModel.value && !isEmbedded()) {
         addEntry({
           text: lastGeneration.value.text,
           voice: lastGeneration.value.voice,

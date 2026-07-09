@@ -10,9 +10,11 @@ let shareFeedbackTimer = null;
 const historyOpen = ref(false);
 const route = useRoute();
 
+const isEmbedded = computed(() => route.query.embed === '1' || route.query.embed === 'true');
+
 const hideModeNav = computed(() => {
-  const { embed, hideModeNav } = route.query;
-  return embed === '1' || embed === 'true' || hideModeNav === '1' || hideModeNav === 'true';
+  const { hideModeNav } = route.query;
+  return isEmbedded.value || hideModeNav === '1' || hideModeNav === 'true';
 });
 
 function copyShareLink() {
@@ -44,6 +46,7 @@ function copyShareLink() {
 
         <div class="flex items-center gap-3">
           <button
+            v-if="!isEmbedded"
             type="button"
             class="px-3 py-1.5 rounded-full text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors min-w-[5rem]"
             :class="shareCopied ? 'bg-green-100 dark:bg-green-900/50 text-green-700 dark:text-green-300' : ''"
@@ -52,6 +55,7 @@ function copyShareLink() {
             {{ shareCopied ? 'Đã copy link' : 'Chia sẻ' }}
           </button>
           <button
+            v-if="!isEmbedded"
             type="button"
             class="px-3 py-1.5 rounded-full text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex items-center gap-1.5"
             :class="historyOpen ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 font-medium' : ''"
@@ -114,6 +118,6 @@ function copyShareLink() {
       <RouterView />
     </main>
 
-    <HistoryPanel :open="historyOpen" @close="historyOpen = false" />
+    <HistoryPanel v-if="!isEmbedded" :open="historyOpen" @close="historyOpen = false" />
   </div>
 </template>
