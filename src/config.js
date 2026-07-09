@@ -1,10 +1,35 @@
 /**
- * Config for i18n (non-Vietnamese) TTS pages.
- * - Local: models from public/tts-model/{lang}/
- * - Production: models from /api/model/piper/{lang}/
+ * Config for browser TTS model assets.
+ * - Vietnamese configs and metadata are static under public/tts-model/vi/.
+ * - Non-Vietnamese production model assets still use /api/model/piper/{lang}/.
  */
 
 export const VI_ONNX_MODEL_BASE_URL = 'https://huggingface.co/doof-ferb/nghitts-copy/resolve/main/piper-tts/';
+
+export const VIETNAMESE_MODELS = [
+  { id: 'banmai', name: 'Ban Mai' },
+  { id: 'chieuthanh', name: 'Chiếu Thành' },
+  { id: 'duyoryx3175', name: 'Duy Oryx' },
+  { id: 'lacphi', name: 'Lạc Phi' },
+  { id: 'maiphuong', name: 'Mai Phương' },
+  { id: 'manhdung', name: 'Mạnh Dũng' },
+  { id: 'minhkhang', name: 'Minh Khang' },
+  { id: 'minhquang', name: 'Minh Quang' },
+  { id: 'minhthu', name: 'Minh Thư' },
+  { id: 'mytam2', name: 'Mỹ Tâm' },
+  { id: 'mytam2794', name: 'Mỹ Tâm Real' },
+  { id: 'ngochuyen', name: 'Ngọc Huyền' },
+  { id: 'ngochuyennew', name: 'Ngọc Huyền (mới)' },
+  { id: 'ngocngan3701', name: 'Ngọc Ngạn' },
+  { id: 'phuongtrang', name: 'Phương Trang' },
+  { id: 'taian2', name: 'Tài An' },
+  { id: 'taian4', name: 'Tài An 4' },
+  { id: 'thanhphuong2', name: 'Thanh Phương Viettel' },
+  { id: 'thientam', name: 'Thiện Tâm' },
+  { id: 'tranthanh3870', name: 'Trấn Thành' },
+  { id: 'vietthao3886', name: 'Việt Thảo' },
+  { id: 'yannew', name: 'Yến Anh' },
+];
 
 export function getVietnameseModelUrls(modelName) {
   const encodedModel = encodeURIComponent(modelName);
@@ -39,7 +64,7 @@ export const DEFAULT_LANG_MODELS = {
 
 /** Default model name to auto-load per language. If not set, first available model is used. */
 export const DEFAULT_MODEL = {
-  vi: 'Ngọc Huyền (mới)',   // null = use first available from /api/models
+  vi: 'ngochuyennew',
   en: 'Libritts_r',
   id: 'Indo_goreng',   // null = use first available
 };

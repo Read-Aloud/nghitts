@@ -13,6 +13,10 @@ const props = defineProps({
 
 const emit = defineEmits(['modelChange']);
 
+const getModelId = (model) => typeof model === 'string' ? model : model.id;
+
+const getModelName = (model) => typeof model === 'string' ? model : model.name || model.id;
+
 const handleModelChange = (event) => {
   emit('modelChange', event.target.value);
 };
@@ -29,10 +33,10 @@ const handleModelChange = (event) => {
       <option value="None">None</option>
       <option 
         v-for="model in models" 
-        :key="model" 
-        :value="model"
+        :key="getModelId(model)" 
+        :value="getModelId(model)"
       >
-        {{ model }}
+        {{ getModelName(model) }}
       </option>
     </select>
     <div class="absolute inset-y-0 right-0 flex items-center px-2 pointer-events-none">
@@ -42,4 +46,3 @@ const handleModelChange = (event) => {
     </div>
   </div>
 </template>
-

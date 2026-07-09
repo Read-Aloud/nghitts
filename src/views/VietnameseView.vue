@@ -55,6 +55,12 @@ const processed = computed(() => {
       lastGeneration.value.voice === selectedVoice.value;
 });
 
+const getModelId = (model) => typeof model === 'string' ? model : model.id;
+
+const getModelName = (model) => typeof model === 'string' ? model : model.name || model.id;
+
+const getModelById = (modelId) => availableModels.value.find((model) => getModelId(model) === modelId) || null;
+
 const isEmbedded = () => window.parent !== window;
 
 const postToParent = (message) => {
@@ -66,8 +72,8 @@ const advertiseVoices = () => {
   postToParent({
     type: "advertise",
     voices: installedModels.value.map((model) => ({
-      id: model,
-      name: model,
+      id: getModelId(model),
+      name: getModelName(model),
     })),
   });
 };
@@ -123,18 +129,21 @@ const setSpeed = (newSpeed) => {
   speed.value = newSpeed;
 };
 
-const getModelUrls = (modelName) => {
-  const { modelPath, configPath } = getVietnameseModelUrls(modelName);
+const getModelUrls = (model) => {
+  const { modelPath, configPath } = getVietnameseModelUrls(getModelId(model));
   return [modelPath, configPath];
 };
 
-const isModelInstalled = (modelName) => installedModels.value.includes(modelName);
+const isModelInstalled = (model) => {
+  const modelId = getModelId(model);
+  return installedModels.value.some((installedModel) => getModelId(installedModel) === modelId);
+};
 
-const isInstalling = (modelName) => Boolean(installingModels.value[modelName]);
+const isInstalling = (model) => Boolean(installingModels.value[getModelId(model)]);
 
-const getInstallProgress = (modelName) => installProgress.value[modelName] || 0;
+const getInstallProgress = (model) => installProgress.value[getModelId(model)] || 0;
 
-const getInstallProgressDetails = (modelName) => installProgressDetails.value[modelName] || null;
+const getInstallProgressDetails = (model) => installProgressDetails.value[getModelId(model)] || null;
 
 const formatBytes = (bytes) => {
   if (!Number.isFinite(bytes) || bytes <= 0) return "";
@@ -217,7 +226,7 @@ const refreshInstalledModels = async (models = availableModels.value) => {
 
   installedModels.value = installed;
 
-  if (selectedModel.value !== "None" && !installed.includes(selectedModel.value)) {
+  if (selectedModel.value !== "None" && !installed.some((model) => getModelId(model) === selectedModel.value)) {
     selectedModel.value = "None";
     resetLoadedVoice();
   }
@@ -225,38 +234,40 @@ const refreshInstalledModels = async (models = availableModels.value) => {
   return installed;
 };
 
-const installModel = async (modelName) => {
-  if (isModelInstalled(modelName) || isInstalling(modelName)) return;
+const installModel = async (model) => {
+  const modelId = getModelId(model);
+  const modelName = getModelName(model);
+  if (isModelInstalled(model) || isInstalling(model)) return;
 
   error.value = null;
   voiceManagerMessage.value = "";
-  installingModels.value = { ...installingModels.value, [modelName]: true };
-  installProgress.value = { ...installProgress.value, [modelName]: 0 };
-  installProgressDetails.value = { ...installProgressDetails.value, [modelName]: null };
+  installingModels.value = { ...installingModels.value, [modelId]: true };
+  installProgress.value = { ...installProgress.value, [modelId]: 0 };
+  installProgressDetails.value = { ...installProgressDetails.value, [modelId]: null };
 
   try {
-    await installUrls(getModelUrls(modelName), ({ percent, received, total }) => {
+    await installUrls(getModelUrls(model), ({ percent, received, total }) => {
       if (percent !== null) {
         installProgress.value = {
           ...installProgress.value,
-          [modelName]: Math.round(percent),
+          [modelId]: Math.round(percent),
         };
       }
       installProgressDetails.value = {
         ...installProgressDetails.value,
-        [modelName]: total > 0
+        [modelId]: total > 0
           ? `${formatBytes(received)} / ${formatBytes(total)}`
           : formatBytes(received),
       };
     });
 
-    installProgress.value = { ...installProgress.value, [modelName]: 100 };
+    installProgress.value = { ...installProgress.value, [modelId]: 100 };
     await refreshInstalledModels();
     voiceManagerMessage.value = `${modelName} installed.`;
 
     if (selectedModel.value === "None") {
-      selectedModel.value = modelName;
-      restartWorker(modelName).catch((err) => {
+      selectedModel.value = modelId;
+      restartWorker(modelId).catch((err) => {
         if (err.message !== "Model load cancelled") {
           console.error("Failed to restart worker:", err);
         }
@@ -266,15 +277,17 @@ const installModel = async (modelName) => {
     console.error(`Failed to install model ${modelName}:`, err);
     error.value = `Failed to install ${modelName}: ${err.message}`;
   } finally {
-    const { [modelName]: _installing, ...remainingInstalling } = installingModels.value;
+    const { [modelId]: _installing, ...remainingInstalling } = installingModels.value;
     installingModels.value = remainingInstalling;
-    const { [modelName]: _details, ...remainingDetails } = installProgressDetails.value;
+    const { [modelId]: _details, ...remainingDetails } = installProgressDetails.value;
     installProgressDetails.value = remainingDetails;
   }
 };
 
-const uninstallModel = async (modelName) => {
-  if (!isModelInstalled(modelName) || isInstalling(modelName)) return;
+const uninstallModel = async (model) => {
+  const modelId = getModelId(model);
+  const modelName = getModelName(model);
+  if (!isModelInstalled(model) || isInstalling(model)) return;
 
   const confirmed = window.confirm(`Remove "${modelName}" from this browser? You can install it again later.`);
   if (!confirmed) return;
@@ -283,8 +296,8 @@ const uninstallModel = async (modelName) => {
   voiceManagerMessage.value = "";
 
   try {
-    await removeUrls(getModelUrls(modelName));
-    const { [modelName]: _progress, ...remainingProgress } = installProgress.value;
+    await removeUrls(getModelUrls(model));
+    const { [modelId]: _progress, ...remainingProgress } = installProgress.value;
     installProgress.value = remainingProgress;
     await refreshInstalledModels();
     voiceManagerMessage.value = `${modelName} removed. Install or select another voice to continue.`;
@@ -361,7 +374,7 @@ const fetchModels = async () => {
     availableModels.value = models;
     const installed = await refreshInstalledModels(models);
 
-    if (selectedModel.value && selectedModel.value !== "None" && !installed.includes(selectedModel.value)) {
+    if (selectedModel.value && selectedModel.value !== "None" && !installed.some((model) => getModelId(model) === selectedModel.value)) {
       selectedModel.value = "None";
       resetLoadedVoice();
     }
@@ -402,7 +415,8 @@ const startEmbeddedSpeech = async ({ text: requestedText, voice }) => {
     postToParent({ type: "onError", message: "Missing voice" });
     return;
   }
-  if (!installedModels.value.includes(modelName)) {
+  const model = getModelById(modelName);
+  if (!model || !isModelInstalled(model)) {
     postToParent({ type: "onError", message: `Voice not installed: ${modelName}` });
     return;
   }
@@ -743,13 +757,13 @@ onUnmounted(() => {
         <div class="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div
             v-for="model in availableModels"
-            :key="model"
+            :key="getModelId(model)"
             class="border border-gray-200 dark:border-gray-700 rounded-lg p-3 bg-white/60 dark:bg-gray-800/60 space-y-2"
           >
             <div class="flex items-center justify-between gap-3">
               <div class="min-w-0">
                 <div class="font-medium text-gray-800 dark:text-gray-100 truncate">
-                  {{ model }}
+                  {{ getModelName(model) }}
                 </div>
                 <div class="mt-1 flex items-center gap-2 text-xs">
                   <span
