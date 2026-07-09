@@ -7,6 +7,7 @@
     "dev": "vite",
     "format": "prettier --write piper-tts-web-demo",
     "build": "vite build",
+    "deploy:ttstool": "npm run build && aws s3 sync --delete --metadata-directive REPLACE --cache-control max-age=86400,public dist s3://lsdsoftware-websites/nghitts.ttstool.com",
     "lint": "eslint piper-tts-web-demo",
     "preview": "vite preview"
   },
