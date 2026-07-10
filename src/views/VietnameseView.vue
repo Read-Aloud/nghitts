@@ -45,6 +45,7 @@ const installProgressDetails = ref({});
 const voiceManagerMessage = ref("");
 const embeddedSentenceRanges = ref([]);
 const embeddedSpeakActive = ref(false);
+const embeddedVolume = ref(1);
 let modelReadyResolve = null;
 let modelReadyReject = null;
 
@@ -64,19 +65,82 @@ const getModelById = (modelId) => availableModels.value.find((model) => getModel
 
 const isEmbedded = () => window.parent !== window;
 
-const postToParent = (message) => {
+const postToParent = (message, targetOrigin = "*") => {
   if (!isEmbedded()) return;
-  window.parent.postMessage(message, "*");
+  window.parent.postMessage(message, targetOrigin);
+};
+
+const makeNghiTTSVoiceName = (model) => `NghiTTS ${getModelName(model)}`;
+
+const getAdvertisedVoices = () => installedModels.value
+  .map((model) => ({
+    voiceName: makeNghiTTSVoiceName(model),
+    lang: "vi-VN",
+    eventTypes: ["start", "sentence", "end", "error"],
+  }))
+  .sort((a, b) => a.voiceName.localeCompare(b.voiceName));
+
+const findModelByVoiceName = (voiceName) => {
+  if (typeof voiceName !== "string") return null;
+
+  return installedModels.value.find((model) => (
+    makeNghiTTSVoiceName(model) === voiceName ||
+    getModelId(model) === voiceName ||
+    getModelName(model) === voiceName
+  )) || null;
 };
 
 const advertiseVoices = () => {
   postToParent({
-    type: "advertise",
-    voices: installedModels.value.map((model) => ({
-      id: getModelId(model),
-      name: getModelName(model),
-    })),
+    type: "notification",
+    to: "nghitts-host",
+    method: "advertiseVoices",
+    args: { voices: getAdvertisedVoices() },
   });
+};
+
+const notifyNghiTTSHost = (method, args) => {
+  postToParent({
+    type: "notification",
+    to: "nghitts-host",
+    method,
+    args,
+  });
+};
+
+const notifyEmbeddedError = (message) => {
+  notifyNghiTTSHost("onError", { error: message });
+};
+
+const sendDispatcherResponse = (request, event, result, error) => {
+  const response = {
+    to: request.from,
+    type: "response",
+    id: request.id,
+    result,
+    error,
+  };
+  event.source?.postMessage(response, { targetOrigin: event.origin });
+};
+
+const handleDispatcherRequest = (event, handlers) => {
+  const request = event.data;
+  if (request?.type !== "request" || request.to !== "nghitts-service") return false;
+
+  const handler = handlers[request.method];
+  if (!handler) {
+    console.error("No NghiTTS service handler for method", request);
+    return true;
+  }
+
+  Promise.resolve()
+    .then(() => handler(request.args || {}))
+    .then(
+      (result) => sendDispatcherResponse(request, event, result, undefined),
+      (err) => sendDispatcherResponse(request, event, undefined, err?.message || String(err))
+    );
+
+  return true;
 };
 
 const getSentenceRanges = (input) => {
@@ -105,7 +169,7 @@ const getSentenceRanges = (input) => {
 
 const postEmbeddedError = (message) => {
   if (!embeddedSpeakActive.value) return;
-  postToParent({ type: "onError", message });
+  notifyEmbeddedError(message);
   embeddedSpeakActive.value = false;
 };
 
@@ -321,7 +385,7 @@ const handleChunkEnd = () => {
     isPlaying.value = false;
     currentChunkIndex.value = -1;
     if (embeddedSpeakActive.value) {
-      postToParent({ type: "onEnd" });
+      notifyNghiTTSHost("onEnd");
       embeddedSpeakActive.value = false;
     }
   } else {
@@ -404,21 +468,22 @@ const handleModelChange = (modelName) => {
   }
 };
 
-const startEmbeddedSpeech = async ({ text: requestedText, voice }) => {
+const startEmbeddedSpeech = async ({ utterance: requestedText, voiceName, rate, volume }) => {
   if (!isEmbedded()) return;
 
-  const modelName = typeof voice === "string" ? voice : selectedModel.value;
+  const requestedModel = findModelByVoiceName(voiceName);
+  const modelName = requestedModel ? getModelId(requestedModel) : null;
   if (!requestedText || typeof requestedText !== "string") {
-    postToParent({ type: "onError", message: "Missing text" });
+    notifyEmbeddedError("Missing utterance");
     return;
   }
   if (!modelName || modelName === "None") {
-    postToParent({ type: "onError", message: "Missing voice" });
+    notifyEmbeddedError("Missing voiceName");
     return;
   }
   const model = getModelById(modelName);
   if (!model || !isModelInstalled(model)) {
-    postToParent({ type: "onError", message: `Voice not installed: ${modelName}` });
+    notifyEmbeddedError(`Voice not installed: ${voiceName || modelName}`);
     return;
   }
 
@@ -429,12 +494,17 @@ const startEmbeddedSpeech = async ({ text: requestedText, voice }) => {
     }
 
     text.value = requestedText;
+    if (typeof rate === "number" && Number.isFinite(rate) && rate > 0) {
+      speed.value = rate;
+    }
+    embeddedVolume.value = typeof volume === "number" && Number.isFinite(volume) && volume >= 0
+      ? volume
+      : 1;
     const sentenceRanges = getSentenceRanges(requestedText);
     embeddedSentenceRanges.value = sentenceRanges;
     embeddedSpeakActive.value = true;
-    postToParent({
-      type: "onStart",
-      sentenceStartIndices: sentenceRanges.map(({ startIndex }) => startIndex),
+    notifyNghiTTSHost("onStart", {
+      sentenceStartIndicies: sentenceRanges.map(({ startIndex }) => startIndex),
     });
 
     status.value = "generating";
@@ -450,7 +520,8 @@ const startEmbeddedSpeech = async ({ text: requestedText, voice }) => {
     lastGeneration.value = params;
     worker.value?.postMessage(params);
   } catch (err) {
-    postToParent({ type: "onError", message: err.message || String(err) });
+    const message = err.message || String(err);
+    notifyEmbeddedError(message);
     embeddedSpeakActive.value = false;
   }
 };
@@ -490,30 +561,27 @@ const skipEmbeddedSentence = (direction) => {
   seekEmbeddedSentence(currentIndex + direction);
 };
 
+const stopEmbeddedSpeech = () => {
+  if (!isEmbedded()) return;
+  isPlaying.value = false;
+  currentChunkIndex.value = -1;
+  embeddedSpeakActive.value = false;
+};
+
 const onParentMessage = (event) => {
   if (!isEmbedded()) return;
   if (event.source !== window.parent) return;
 
-  switch (event.data?.type) {
-    case "speak":
-      startEmbeddedSpeech(event.data);
-      break;
-    case "pause":
-      pauseEmbeddedSpeech();
-      break;
-    case "resume":
-      resumeEmbeddedSpeech();
-      break;
-    case "forward":
-      skipEmbeddedSentence(1);
-      break;
-    case "rewind":
-      skipEmbeddedSentence(-1);
-      break;
-    case "seek":
-      seekEmbeddedSentence(event.data.index);
-      break;
-  }
+  if (handleDispatcherRequest(event, {
+    speak: (args) => startEmbeddedSpeech(args),
+    pause: () => pauseEmbeddedSpeech(),
+    resume: () => resumeEmbeddedSpeech(),
+    stop: () => stopEmbeddedSpeech(),
+    forward: () => skipEmbeddedSentence(1),
+    rewind: () => skipEmbeddedSentence(-1),
+    seek: (args) => seekEmbeddedSentence(args.index),
+  })) return;
+
 };
 
 // Worker message handlers
@@ -584,8 +652,7 @@ const handleAudioChunkStart = (index) => {
 
   const range = embeddedSentenceRanges.value[index];
   if (range) {
-    postToParent({
-      type: "onSentence",
+    notifyNghiTTSHost("onSentence", {
       startIndex: range.startIndex,
       endIndex: range.endIndex,
     });
@@ -721,6 +788,7 @@ onUnmounted(() => {
             :audio="chunk.audio"
             :active="currentChunkIndex === index"
             :playing="isPlaying"
+            :volume="embeddedVolume"
             reset-when-inactive
             class="hidden"
             @start="() => handleAudioChunkStart(index)"

@@ -15,6 +15,10 @@ const props = defineProps({
     type: Boolean,
     required: true
   },
+  volume: {
+    type: Number,
+    default: 1
+  },
   resetWhenInactive: {
     type: Boolean,
     default: false
@@ -52,6 +56,7 @@ watch([() => props.active, () => props.playing], ([newActive, newPlaying], [oldA
   if (newPlaying) {
     player.play({
       restart: !oldActive || player.ended,
+      volume: props.volume,
       onStart: props.onStart,
       onEnd: props.onEnd,
       onError: (err) => console.error('Error playing audio chunk:', err),
@@ -67,6 +72,7 @@ onMounted(() => {
 
   if (props.active && props.playing) {
     player.play({
+      volume: props.volume,
       onStart: props.onStart,
       onEnd: props.onEnd,
       onError: (err) => console.error('Error playing audio chunk:', err),

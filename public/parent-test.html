@@ -142,8 +142,8 @@
       <aside>
         <h1>Parent Frame Test</h1>
         <p>
-          This page embeds the Vietnamese TTS view and exercises the parent
-          messaging API.
+          This page embeds the Vietnamese TTS view and exercises the
+          Piper-compatible dispatcher API.
         </p>
 
         <label for="voice">Advertised voice</label>
@@ -195,6 +195,8 @@
       const statusEl = document.getElementById("status");
       const logEl = document.getElementById("log");
       let voices = [];
+      let requestId = 0;
+      const pendingRequests = new Map();
 
       function log(message, payload) {
         const time = new Date().toLocaleTimeString();
@@ -217,9 +219,28 @@
         }
 
         for (const voice of voices) {
-          voiceSelect.append(new Option(voice.name || voice.id, voice.id));
+          voiceSelect.append(new Option(voice.voiceName, voice.voiceName));
         }
         speakButton.disabled = false;
+      }
+
+      function sendRequest(method, args = {}) {
+        const id = String(++requestId);
+        const message = {
+          from: "nghitts-host",
+          to: "nghitts-service",
+          type: "request",
+          id,
+          method,
+          args,
+        };
+        child.contentWindow.postMessage(message, window.location.origin);
+        log("parent -> child", message);
+        setStatus(`${method} request sent.`);
+
+        return new Promise((resolve, reject) => {
+          pendingRequests.set(id, { resolve, reject });
+        });
       }
 
       window.addEventListener("message", (event) => {
@@ -228,76 +249,74 @@
         const data = event.data || {};
         log("child -> parent", data);
 
-        switch (data.type) {
-          case "advertise":
-            renderVoices(data.voices);
+        if (data.type === "response") {
+          const pending = pendingRequests.get(data.id);
+          if (pending) {
+            pendingRequests.delete(data.id);
+            if (data.error) pending.reject(data.error);
+            else pending.resolve(data.result);
+          }
+          return;
+        }
+
+        if (data.type !== "notification" || data.to !== "nghitts-host") {
+          setStatus(`Unknown message: ${data.type || "(missing type)"}`);
+          return;
+        }
+
+        switch (data.method) {
+          case "advertiseVoices":
+            renderVoices(data.args?.voices);
             setStatus(`Advertised ${voices.length} voice(s).`);
             break;
           case "onStart":
-            setStatus(`Started. Sentence starts: ${(data.sentenceStartIndices || []).join(", ")}`);
+            setStatus(`Started. Sentence starts: ${(data.args?.sentenceStartIndicies || []).join(", ")}`);
             break;
           case "onSentence":
-            setStatus(`Sentence: ${data.startIndex}-${data.endIndex}`);
+            setStatus(`Sentence: ${data.args?.startIndex}-${data.args?.endIndex}`);
             break;
           case "onEnd":
             setStatus("Speech finished.");
             break;
           case "onError":
-            setStatus(`Error: ${data.message || "Unknown error"}`);
+            setStatus(`Error: ${data.args?.error || "Unknown error"}`);
             break;
           default:
-            setStatus(`Unknown message: ${data.type || "(missing type)"}`);
+            setStatus(`Unknown notification: ${data.method || "(missing method)"}`);
         }
       });
 
       speakButton.addEventListener("click", () => {
-        const message = {
-          type: "speak",
-          text: textInput.value,
-          voice: voiceSelect.value,
-        };
-
-        child.contentWindow.postMessage(message, window.location.origin);
-        log("parent -> child", message);
-        setStatus("Speak message sent.");
+        sendRequest("speak", {
+          utterance: textInput.value,
+          voiceName: voiceSelect.value,
+          pitch: 1,
+          rate: 1,
+          volume: 1,
+          externalPlayback: false,
+        }).catch((err) => setStatus(`Speak failed: ${err}`));
       });
 
       pauseButton.addEventListener("click", () => {
-        const message = { type: "pause" };
-        child.contentWindow.postMessage(message, window.location.origin);
-        log("parent -> child", message);
-        setStatus("Pause message sent.");
+        sendRequest("pause").catch((err) => setStatus(`Pause failed: ${err}`));
       });
 
       resumeButton.addEventListener("click", () => {
-        const message = { type: "resume" };
-        child.contentWindow.postMessage(message, window.location.origin);
-        log("parent -> child", message);
-        setStatus("Resume message sent.");
+        sendRequest("resume").catch((err) => setStatus(`Resume failed: ${err}`));
       });
 
       rewindButton.addEventListener("click", () => {
-        const message = { type: "rewind" };
-        child.contentWindow.postMessage(message, window.location.origin);
-        log("parent -> child", message);
-        setStatus("Rewind message sent.");
+        sendRequest("rewind").catch((err) => setStatus(`Rewind failed: ${err}`));
       });
 
       forwardButton.addEventListener("click", () => {
-        const message = { type: "forward" };
-        child.contentWindow.postMessage(message, window.location.origin);
-        log("parent -> child", message);
-        setStatus("Forward message sent.");
+        sendRequest("forward").catch((err) => setStatus(`Forward failed: ${err}`));
       });
 
       seekButton.addEventListener("click", () => {
-        const message = {
-          type: "seek",
+        sendRequest("seek", {
           index: Number(seekIndexInput.value),
-        };
-        child.contentWindow.postMessage(message, window.location.origin);
-        log("parent -> child", message);
-        setStatus("Seek message sent.");
+        }).catch((err) => setStatus(`Seek failed: ${err}`));
       });
     </script>
   </body>

@@ -27,6 +27,7 @@ export class WebAudioPlayer {
     this.audioBuffer = null;
     this.decodePromise = null;
     this.source = null;
+    this.gainNode = null;
     this.startedAt = 0;
     this.offset = 0;
     this.isPlaying = false;
@@ -52,7 +53,7 @@ export class WebAudioPlayer {
     return this.decodePromise;
   }
 
-  async play({ restart = false, onStart, onEnd, onError } = {}) {
+  async play({ restart = false, volume = 1, onStart, onEnd, onError } = {}) {
     const token = ++this.playToken;
 
     try {
@@ -67,17 +68,24 @@ export class WebAudioPlayer {
       }
 
       const source = context.createBufferSource();
+      const gainNode = context.createGain();
       source.buffer = audioBuffer;
-      source.connect(context.destination);
+      gainNode.gain.value = volume;
+      source.connect(gainNode);
+      gainNode.connect(context.destination);
       source.onended = () => {
         if (this.source !== source) return;
         this.source = null;
+        this.gainNode = null;
         this.isPlaying = false;
         this.offset = audioBuffer.duration;
+        source.disconnect();
+        gainNode.disconnect();
         onEnd?.();
       };
 
       this.source = source;
+      this.gainNode = gainNode;
       this.startedAt = context.currentTime - this.offset;
       this.isPlaying = true;
       source.start(0, this.offset);
@@ -118,6 +126,8 @@ export class WebAudioPlayer {
     this.source = null;
     source.onended = null;
     source.disconnect();
+    this.gainNode?.disconnect();
+    this.gainNode = null;
     try {
       source.stop();
     } catch {
