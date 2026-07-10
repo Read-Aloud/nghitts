@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { RouterView, useRoute } from 'vue-router';
 import ThemeToggle from './components/ThemeToggle.vue';
 import HistoryPanel from './components/HistoryPanel.vue';
-import { History } from 'lucide-vue-next';
+import { Github, History } from 'lucide-vue-next';
 
 const shareCopied = ref(false);
 let shareFeedbackTimer = null;
@@ -45,6 +45,16 @@ function copyShareLink() {
         </div>
 
         <div class="flex items-center gap-3">
+          <a
+            href="https://github.com/nghimestudio/nghitts"
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex h-9 w-9 items-center justify-center rounded-full bg-gray-100 text-gray-700 transition-colors hover:bg-gray-200 hover:text-gray-900 dark:bg-gray-800 dark:text-gray-300 dark:hover:bg-gray-700 dark:hover:text-white"
+            aria-label="Open NghiTTS on GitHub"
+            title="Open NghiTTS on GitHub"
+          >
+            <Github class="h-4 w-4" />
+          </a>
           <button
             v-if="!isEmbedded"
             type="button"
