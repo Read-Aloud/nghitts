@@ -14,6 +14,7 @@ import ModelSelector from '../components/ModelSelector.vue';
 import VoiceSelector from '../components/VoiceSelector.vue';
 import { getModelsListUrl, DEFAULT_LANG_MODELS, DEFAULT_MODEL } from '../config.js';
 import { addEntry } from '../utils/history-store.js';
+import { playBlobWithWebAudio } from '../utils/web-audio-player.js';
 
 const props = defineProps({
   lang: {
@@ -254,11 +255,9 @@ const onMessageReceived = ({ data }) => {
       break;
     case "preview":
       if (data.audio) {
-        const audioUrl = URL.createObjectURL(data.audio);
-        const audio = new Audio(audioUrl);
-        audio.play().then(() => {
-          setTimeout(() => URL.revokeObjectURL(audioUrl), 1000);
-        }).catch(err => console.error('Error playing preview:', err));
+        playBlobWithWebAudio(data.audio, {
+          onError: (err) => console.error('Error playing preview:', err),
+        });
       }
       break;
   }

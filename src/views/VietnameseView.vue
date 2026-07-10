@@ -16,6 +16,7 @@ import { fetchAvailableModels } from '../utils/model-detector.js';
 import { addEntry } from '../utils/history-store.js';
 import { getVietnameseModelUrls } from '../config.js';
 import { areUrlsCached, installUrls, removeUrls } from '../utils/model-cache.js';
+import { playBlobWithWebAudio } from '../utils/web-audio-player.js';
 
 // State variables
 const text = ref(
@@ -562,11 +563,9 @@ const onMessageReceived = ({ data }) => {
       break;
     case "preview":
       if (data.audio) {
-        const audioUrl = URL.createObjectURL(data.audio);
-        const audio = new Audio(audioUrl);
-        audio.play().then(() => {
-          setTimeout(() => URL.revokeObjectURL(audioUrl), 1000);
-        }).catch(err => console.error('Error playing preview:', err));
+        playBlobWithWebAudio(data.audio, {
+          onError: (err) => console.error('Error playing preview:', err),
+        });
       }
       break;
   }

@@ -8,6 +8,7 @@ import {
   Trash2Icon,
 } from 'lucide-vue-next';
 import { getEntries, deleteEntry, clearAll } from '../utils/history-store.js';
+import { playBlobWithWebAudio } from '../utils/web-audio-player.js';
 
 const props = defineProps({
   open: { type: Boolean, default: false },
@@ -68,11 +69,9 @@ function downloadFilename(entry) {
 
 function playAudio(entry) {
   if (!entry?.audio) return;
-  const url = URL.createObjectURL(entry.audio);
-  const audio = new Audio(url);
-  audio.onended = () => URL.revokeObjectURL(url);
-  audio.onerror = () => URL.revokeObjectURL(url);
-  audio.play().catch(() => URL.revokeObjectURL(url));
+  playBlobWithWebAudio(entry.audio, {
+    onError: (err) => console.error('History playback failed:', err),
+  });
 }
 
 function downloadAudio(entry) {

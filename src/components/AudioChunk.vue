@@ -1,5 +1,6 @@
 <script setup>
-import { ref, onMounted, onUnmounted, watch, computed } from 'vue';
+import { onMounted, onUnmounted, watch } from 'vue';
+import { WebAudioPlayer } from '../utils/web-audio-player.js';
 
 const props = defineProps({
   audio: {
@@ -32,69 +33,52 @@ const props = defineProps({
   }
 });
 
-const audioRef = ref(null);
-
-// Create URL for the audio blob
-const url = computed(() => {
-  return URL.createObjectURL(props.audio);
-});
+const player = new WebAudioPlayer(props.audio);
 
 const handlePause = () => {
-  if (audioRef.value?.ended) return;
+  if (player.ended) return;
   props.onPause();
 }
 
 // Watch for changes in active/playing state
 watch([() => props.active, () => props.playing], ([newActive, newPlaying], [oldActive]) => {
-  if (!audioRef.value) return;
   if (!newActive) {
     if (props.resetWhenInactive && oldActive) {
-      audioRef.value.pause();
-      audioRef.value.currentTime = 0;
+      player.stop({ reset: true });
     }
     return;
   }
 
   if (newPlaying) {
-    if (!oldActive || audioRef.value.ended) {
-      audioRef.value.currentTime = 0;
-    }
-    audioRef.value.play();
+    player.play({
+      restart: !oldActive || player.ended,
+      onStart: props.onStart,
+      onEnd: props.onEnd,
+      onError: (err) => console.error('Error playing audio chunk:', err),
+    });
   } else {
-    audioRef.value.pause();
+    player.pause({ onPause: handlePause });
   }
 });
 
 // Handle audio element lifecycle
 onMounted(() => {
   if (!props.audio) return;
-  if (!audioRef.value) return;
 
-  if (props.active) {
-    audioRef.value.play();
-    audioRef.value.scrollIntoView({
-      behavior: "smooth",
-      block: "center",
+  if (props.active && props.playing) {
+    player.play({
+      onStart: props.onStart,
+      onEnd: props.onEnd,
+      onError: (err) => console.error('Error playing audio chunk:', err),
     });
   } else {
-    audioRef.value.pause();
-    audioRef.value.currentTime = 0;
+    player.stop({ reset: true });
   }
 })
 
 onUnmounted(() => {
-  // Revoke the object URL to free memory
-  URL.revokeObjectURL(url.value);
+  player.stop({ reset: true });
 });
 </script>
 
-<template>
-  <audio
-    ref="audioRef"
-    :src="url"
-    controls
-    @play="onStart"
-    @pause="handlePause"
-    @ended="onEnd"
-  ></audio>
-</template>
+<template></template>
