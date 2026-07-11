@@ -126,30 +126,18 @@ export async function loadConfig() {
     } catch (error) {
         console.warn('Failed to load config, using defaults:', error);
         // Default to enabled if config can't be loaded
-        configCache = { enableTransliteration: true, debug: false };
+        configCache = { enableTransliteration: true };
         return configCache;
     }
 }
 
 /**
- * Check if debug mode is enabled
- * @param {object} config - Configuration object
- * @returns {boolean} - True if debug is enabled
- */
-export function isDebugEnabled(config) {
-    return config && config.debug === true;
-}
-
-/**
  * Debug log helper
- * @param {object} config - Configuration object
  * @param {string} step - Step name
  * @param {object} data - Data to log
  */
-export function debugLog(config, step, data) {
-    if (isDebugEnabled(config)) {
-        console.log(`[DEBUG] ${step}:`, data);
-    }
+export function debugLog(step, data) {
+    console.debug(`[DEBUG] ${step}:`, data);
 }
 
 /**
@@ -157,10 +145,9 @@ export function debugLog(config, step, data) {
  * Only processes words that weren't replaced by CSV and aren't Vietnamese
  * @param {string} text - Text to process
  * @param {Map} replacementMap - Map of words that were already replaced
- * @param {object} config - Configuration object for debug logging
  * @returns {string} - Text with transliterated words
  */
-function applyTransliteration(text, replacementMap, config = null) {
+function applyTransliteration(text, replacementMap) {
     if (!text || typeof text !== 'string') {
         return text;
     }
@@ -192,12 +179,10 @@ function applyTransliteration(text, replacementMap, config = null) {
 
         // Skip if word is in replacement map (was already replaced by CSV)
         if (replacementMap.has(wordLower)) {
-            if (isDebugEnabled(config)) {
-                debugLog(config, 'Transliteration', { 
-                    word, 
-                    action: 'SKIPPED (in CSV map)' 
-                });
-            }
+            debugLog('Transliteration', {
+                word,
+                action: 'SKIPPED (in CSV map)'
+            });
             continue;
         }
 
@@ -207,22 +192,18 @@ function applyTransliteration(text, replacementMap, config = null) {
         const isVietnamese = isVietnameseOriginal || isVietnameseLower;
         
         if (isVietnamese) {
-            if (isDebugEnabled(config)) {
-                debugLog(config, 'Transliteration', { 
-                    word, 
-                    action: 'SKIPPED (Vietnamese)',
-                    hasDiacritics: /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i.test(word)
-                });
-            }
+            debugLog('Transliteration', {
+                word,
+                action: 'SKIPPED (Vietnamese)',
+                hasDiacritics: /[àáảãạăằắẳẵặâầấẩẫậèéẻẽẹêềếểễệìíỉĩịòóỏõọôồốổỗộơờớởỡợùúủũụưừứửữựỳýỷỹỵđ]/i.test(word)
+            });
             continue;
         }
 
         // Skip single-character tokens (e.g. "a", "z" in "a đến z" or letters in "m.a.s.s.a.g.e")
         // Do not transliterate so output stays unchanged for these
         if (word.length === 1) {
-            if (isDebugEnabled(config)) {
-                debugLog(config, 'Transliteration', { word, action: 'SKIPPED (single character)' });
-            }
+            debugLog('Transliteration', { word, action: 'SKIPPED (single character)' });
             continue;
         }
 
@@ -250,8 +231,8 @@ function applyTransliteration(text, replacementMap, config = null) {
         });
     }
 
-    if (isDebugEnabled(config) && transliteratedWords.length > 0) {
-        debugLog(config, 'Transliteration', {
+    if (transliteratedWords.length > 0) {
+        debugLog('Transliteration', {
             totalWords: transliteratedWords.length,
             words: transliteratedWords
         });
@@ -265,10 +246,9 @@ function applyTransliteration(text, replacementMap, config = null) {
  * Matches acronyms case-insensitively, handling dots in acronyms (e.g., "tp.hcm")
  * @param {string} text - Text to process
  * @param {Map} acronymMap - Map of acronym replacements
- * @param {object} config - Configuration object for debug logging
  * @returns {string} - Text with converted acronyms
  */
-export async function convertAcronyms(text, acronymMap, config = null) {
+export async function convertAcronyms(text, acronymMap) {
     if (!text || typeof text !== 'string' || !acronymMap || acronymMap.size === 0) {
         return text;
     }
@@ -296,13 +276,13 @@ export async function convertAcronyms(text, acronymMap, config = null) {
         });
         
         // Track conversions for debug
-        if (isDebugEnabled(config) && beforeReplace !== result) {
+        if (beforeReplace !== result) {
             convertedAcronyms.push({ acronym, transliteration });
         }
     }
 
-    if (isDebugEnabled(config) && convertedAcronyms.length > 0) {
-        debugLog(config, 'Acronym Conversion', {
+    if (convertedAcronyms.length > 0) {
+        debugLog('Acronym Conversion', {
             totalConversions: convertedAcronyms.length,
             acronyms: convertedAcronyms
         });
@@ -316,10 +296,9 @@ export async function convertAcronyms(text, acronymMap, config = null) {
  * Matches whole words/phrases only, processing longest matches first
  * @param {string} text - Text to process
  * @param {Map} replacementMap - Map of word replacements
- * @param {object} config - Configuration object for debug logging
  * @returns {string} - Text with replaced words
  */
-export async function replaceNonVietnameseWords(text, replacementMap, config = null) {
+export async function replaceNonVietnameseWords(text, replacementMap) {
     if (!text || typeof text !== 'string' || !replacementMap || replacementMap.size === 0) {
         return text;
     }
@@ -348,13 +327,13 @@ export async function replaceNonVietnameseWords(text, replacementMap, config = n
         });
         
         // Track replacements for debug
-        if (isDebugEnabled(config) && beforeReplace !== result) {
+        if (beforeReplace !== result) {
             replacedWords.push({ original, transliteration });
         }
     }
 
-    if (isDebugEnabled(config) && replacedWords.length > 0) {
-        debugLog(config, 'CSV Word Replacement', {
+    if (replacedWords.length > 0) {
+        debugLog('CSV Word Replacement', {
             totalReplacements: replacedWords.length,
             words: replacedWords.slice(0, 20) // Limit to first 20 for readability
         });
@@ -394,98 +373,72 @@ export async function processTextForTTS(text) {
         return '';
     }
 
-    // Load config first for debug logging
     const config = await loadConfig();
-    
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Preprocessing Start', { originalText: text });
-    }
+    debugLog('Preprocessing Start', { originalText: text });
 
     // First, clean the text
     const cleanedText = cleanTextForTTS(text);
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Step 1: Text Cleaning', { 
-            before: text, 
-            after: cleanedText 
-        });
-    }
+    debugLog('Step 1: Text Cleaning', {
+        before: text,
+        after: cleanedText
+    });
 
     // Then, process Vietnamese text (convert numbers, dates, times, etc.)
     const vietnameseProcessedText = processVietnameseText(cleanedText, config);
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Step 2: Vietnamese Processing', { 
-            before: cleanedText, 
-            after: vietnameseProcessedText 
-        });
-    }
+    debugLog('Step 2: Vietnamese Processing', {
+        before: cleanedText,
+        after: vietnameseProcessedText
+    });
 
     // Normalize to lowercase for consistent matching of non-Vietnamese words and acronyms
     const mappingInput = vietnameseProcessedText.toLowerCase();
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Step 2.5: Lowercase Normalization', { 
-            before: vietnameseProcessedText, 
-            after: mappingInput 
-        });
-    }
+    debugLog('Step 2.5: Lowercase Normalization', {
+        before: vietnameseProcessedText,
+        after: mappingInput
+    });
 
     // Step 3: Acronym conversion (after lowercase for consistent matching)
     const acronymMap = await loadAcronymMap();
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Acronym Map Loaded', { 
-            totalEntries: acronymMap.size 
-        });
-    }
-    const textAfterAcronymConversion = await convertAcronyms(mappingInput, acronymMap, config);
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Step 3: Acronym Conversion', { 
-            before: mappingInput, 
-            after: textAfterAcronymConversion 
-        });
-    }
+    debugLog('Acronym Map Loaded', { totalEntries: acronymMap.size });
+    const textAfterAcronymConversion = await convertAcronyms(mappingInput, acronymMap);
+    debugLog('Step 3: Acronym Conversion', {
+        before: mappingInput,
+        after: textAfterAcronymConversion
+    });
 
     // Load replacement map
     const replacementMap = await loadWordReplacementMap();
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'CSV Map Loaded', { 
-            totalEntries: replacementMap.size 
-        });
-    }
+    debugLog('CSV Map Loaded', { totalEntries: replacementMap.size });
     
     // Step 4: Replace non-Vietnamese words from CSV
     // This ensures CSV entries take priority over transliteration
-    const textAfterWordReplacement = await replaceNonVietnameseWords(textAfterAcronymConversion, replacementMap, config);
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Step 4: CSV Word Replacement', { 
-            before: textAfterAcronymConversion, 
-            after: textAfterWordReplacement 
-        });
-    }
+    const textAfterWordReplacement = await replaceNonVietnameseWords(textAfterAcronymConversion, replacementMap);
+    debugLog('Step 4: CSV Word Replacement', {
+        before: textAfterAcronymConversion,
+        after: textAfterWordReplacement
+    });
     
     // Step 4.5: Apply transliteration to words not in CSV (if enabled)
     // This happens AFTER CSV replacement so we only transliterate words that weren't replaced
     let processedText = textAfterWordReplacement;
     if (config.enableTransliteration) {
-        processedText = applyTransliteration(textAfterWordReplacement, replacementMap, config);
-        if (isDebugEnabled(config)) {
-            debugLog(config, 'Step 4.5: Transliteration', { 
-                before: textAfterWordReplacement, 
-                after: processedText,
-                enabled: true
-            });
-        }
-    } else if (isDebugEnabled(config)) {
-        debugLog(config, 'Step 4.5: Transliteration', { 
+        processedText = applyTransliteration(textAfterWordReplacement, replacementMap);
+        debugLog('Step 4.5: Transliteration', {
+            before: textAfterWordReplacement,
+            after: processedText,
+            enabled: true
+        });
+    } else {
+        debugLog('Step 4.5: Transliteration', {
             enabled: false,
             skipped: true
         });
     }
 
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Preprocessing Complete', { 
-            original: text, 
-            final: processedText 
-        });
-    }
+    debugLog('Preprocessing Complete', {
+        original: text,
+        final: processedText
+    });
 
     return processedText;
 }
@@ -495,15 +448,10 @@ export async function chunkText(text) {
         return [];
     }
 
-    // Load config for debug logging
-    const config = await loadConfig();
-
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Step 5: Text Chunking Start', { 
-            inputText: text,
-            inputLength: text.length
-        });
-    }
+    debugLog('Step 5: Text Chunking Start', {
+        inputText: text,
+        inputLength: text.length
+    });
 
     // First, split by newlines
     const lines = text.split('\n');
@@ -533,16 +481,14 @@ export async function chunkText(text) {
         }
     }
 
-    if (isDebugEnabled(config)) {
-        debugLog(config, 'Step 5: Text Chunking Complete', {
-            totalChunks: chunks.length,
-            chunks: chunks.map((chunk, idx) => ({
-                index: idx + 1,
-                text: chunk,
-                length: chunk.length
-            }))
-        });
-    }
+    debugLog('Step 5: Text Chunking Complete', {
+        totalChunks: chunks.length,
+        chunks: chunks.map((chunk, idx) => ({
+            index: idx + 1,
+            text: chunk,
+            length: chunk.length
+        }))
+    });
 
     return chunks;
 }

@@ -700,7 +700,7 @@ function convertDate(text) {
     
     // Only log if there were matches
     if (matches.length > 0) {
-        console.log('📅 [Date] Matches:', matches);
+        console.debug('📅 [Date] Matches:', matches);
     }
     
     return text;
@@ -1027,7 +1027,7 @@ export function processVietnameseText(text, config = null) {
     
     // Only log if text actually changed
     if (text !== originalText) {
-        console.log('📝 [Vietnamese Processor]', {
+        console.debug('📝 [Vietnamese Processor]', {
             input: originalText,
             output: text
         });
@@ -1040,4 +1040,3 @@ export { numberToWords, convertDecimal, convertPercentage, convertCurrency,
          convertTime, convertDate, convertYearRange, convertOrdinal, convertRomanNumerals,
          convertStandaloneNumbers, convertMeasurementUnits, convertPhoneNumber, normalizeUnicode,
          removeSpecialChars, normalizePunctuation, cleanWhitespace };
-

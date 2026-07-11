@@ -1,6 +1,6 @@
 /* eslint-disable no-undef */
 
-import { processTextForTTS, chunkText, loadConfig, isDebugEnabled, debugLog } from '../utils/text-cleaner.js';
+import { processTextForTTS, chunkText } from '../utils/text-cleaner.js';
 
 // Merge phonemizer output (which may be an array of clause strings) into a single
 // string while preserving clause separators (commas/semicolons/colons) from the
@@ -190,22 +190,16 @@ export class PiperTTS {
 
   // Convert text to phonemes using the phonemizer package
   async textToPhonemes(text) {
-    const config = await loadConfig();
-    
-    if (isDebugEnabled(config)) {
-      console.log(`[TEXT TO PHONEMES] Input text: ${JSON.stringify(text)}`);
-      console.log(text)
-    }
+    console.debug(`[TEXT TO PHONEMES] Input text: ${JSON.stringify(text)}`);
+    console.debug(text);
     
     if (this.voiceConfig.phoneme_type === "text") {
       // Text phonemes - just return normalized characters
       const normalized = text.normalize("NFD");
       const result = [Array.from(normalized)];
       
-      if (isDebugEnabled(config)) {
-        console.log(`[TEXT MODE] Normalized: ${JSON.stringify(normalized)}`);
-        console.log(`[FINAL PHONEMES] Result: ${JSON.stringify(result)}`);
-      }
+      console.debug(`[TEXT MODE] Normalized: ${JSON.stringify(normalized)}`);
+      console.debug(`[FINAL PHONEMES] Result: ${JSON.stringify(result)}`);
       
       return result;
     }
@@ -214,16 +208,12 @@ export class PiperTTS {
     const { phonemize } = await import('phonemizer');
     const voice = this.voiceConfig.espeak?.voice || 'en-us';
     
-    if (isDebugEnabled(config)) {
-      console.log(`[PHONEMIZER] Voice: ${voice}`);
-    }
+    console.debug(`[PHONEMIZER] Voice: ${voice}`);
     
     const phonemes = await phonemize(text, voice);
     
-    if (isDebugEnabled(config)) {
-      console.log(`[PHONEMIZER] Raw output: ${JSON.stringify(phonemes)}`);
-      console.log(phonemes);
-    }
+    console.debug(`[PHONEMIZER] Raw output: ${JSON.stringify(phonemes)}`);
+    console.debug(phonemes);
     
     // Merge phonemizer output into a single string while preserving punctuation,
     // then remove (en) and (vi) markers from phoneme text
@@ -232,9 +222,7 @@ export class PiperTTS {
       .replace(/\(en\)/g, '')
       .replace(/\(vi\)/g, '');
     
-    if (isDebugEnabled(config)) {
-      console.log(`[PHONEMIZER] After marker removal: ${JSON.stringify(cleanedPhonemeText)}`);
-    }
+    console.debug(`[PHONEMIZER] After marker removal: ${JSON.stringify(cleanedPhonemeText)}`);
     
     const phonemeText = cleanedPhonemeText;
     
@@ -243,16 +231,11 @@ export class PiperTTS {
     const sentence = phonemeText.trim();
     const result = sentence ? [Array.from(sentence.normalize("NFD"))] : [];
     
-    if (isDebugEnabled(config)) {
-      console.log(`[SENTENCE SPLIT] Split into ${result.length} sentences`);
-      if (sentence) {
-        console.log(`  Sentence 1: ${JSON.stringify(sentence)}`);
-      }
+    console.debug(`[SENTENCE SPLIT] Split into ${result.length} sentences`);
+    if (sentence) {
+      console.debug(`  Sentence 1: ${JSON.stringify(sentence)}`);
     }
-    
-    if (isDebugEnabled(config)) {
-      console.log(`[FINAL PHONEMES] Result: ${JSON.stringify(result)}`);
-    }
+    console.debug(`[FINAL PHONEMES] Result: ${JSON.stringify(result)}`);
     
     return result;
   }
@@ -263,24 +246,19 @@ export class PiperTTS {
       throw new Error('Phoneme ID map not available');
     }
 
-    const config = await loadConfig();
     const idMap = this.voiceConfig.phoneme_id_map;
     const BOS = "^";
     const EOS = "$";
     const PAD = "_";
     
-    if (isDebugEnabled(config)) {
-      console.log(`[PHONEME TO ID] BOS=${idMap[BOS]}, PAD=${idMap[PAD]}, EOS=${idMap[EOS]}`);
-    }
+    console.debug(`[PHONEME TO ID] BOS=${idMap[BOS]}, PAD=${idMap[PAD]}, EOS=${idMap[EOS]}`);
     
     let phonemeIds = [];
 
     for (let sentenceIdx = 0; sentenceIdx < textPhonemes.length; sentenceIdx++) {
       const sentencePhonemes = textPhonemes[sentenceIdx];
       
-      if (isDebugEnabled(config)) {
-        console.log(`[SENTENCE ${sentenceIdx + 1}] Phonemes: ${JSON.stringify(sentencePhonemes)}`);
-      }
+      console.debug(`[SENTENCE ${sentenceIdx + 1}] Phonemes: ${JSON.stringify(sentencePhonemes)}`);
       
       phonemeIds.push(idMap[BOS]);
       phonemeIds.push(idMap[PAD]);
@@ -295,10 +273,8 @@ export class PiperTTS {
       phonemeIds.push(idMap[EOS]);
     }
 
-    if (isDebugEnabled(config)) {
-      console.log(`[PHONEME TO ID] Total IDs: ${phonemeIds.length}`);
-      console.log(`[PHONEME TO ID] ID sequence: ${phonemeIds.join(' ')}`);
-    }
+    console.debug(`[PHONEME TO ID] Total IDs: ${phonemeIds.length}`);
+    console.debug(`[PHONEME TO ID] ID sequence: ${phonemeIds.join(' ')}`);
 
     return phonemeIds;
   }
@@ -306,7 +282,6 @@ export class PiperTTS {
   async *stream(textStreamer, options = {}) {
     const { speakerId = 0, lengthScale = 1.0, noiseScale = 0.667, noiseWScale = 0.8 } = options;
     
-    const config = await loadConfig();
     let chunkIdx = 0;
     
     // Process the text stream
@@ -316,9 +291,7 @@ export class PiperTTS {
           if (this.session && this.voiceConfig) {
             chunkIdx++;
             
-            if (isDebugEnabled(config)) {
-              console.log(`[CHUNK ${chunkIdx}] Processing text: ${JSON.stringify(text)}`);
-            }
+            console.debug(`[CHUNK ${chunkIdx}] Processing text: ${JSON.stringify(text)}`);
             
             // Convert text to phonemes then to IDs
             const textPhonemes = await this.textToPhonemes(text);
