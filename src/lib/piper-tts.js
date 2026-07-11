@@ -1,6 +1,6 @@
 /* eslint-disable no-undef */
 
-import { processTextForTTS, chunkText } from '../utils/text-cleaner.js';
+import { processTextForTTS, chunkTextWithBoundaries } from '../utils/text-cleaner.js';
 
 // Merge phonemizer output (which may be an array of clause strings) into a single
 // string while preserving clause separators (commas/semicolons/colons) from the
@@ -55,19 +55,31 @@ function mergePhonemizerOutputPreservePunct(text, phonemes) {
 export class TextSplitterStream {
   constructor() {
     this.chunks = [];
+    this.gapsAfter = [];
     this.closed = false;
   }
 
-  async chunkText(text) {
+  async getChunkDetails(text) {
     // Process the text (clean + replace words), then chunk it
     const processedText = await processTextForTTS(text);
-    return await chunkText(processedText);
+    return await chunkTextWithBoundaries(processedText);
+  }
+
+  async chunkText(text) {
+    const chunks = await this.getChunkDetails(text);
+    return chunks.map((chunk) => chunk.text);
   }
 
   async push(text) {
-    // Simple sentence splitting for now
-    const sentences = await this.chunkText(text) || [text];
-    this.chunks.push(...sentences);
+    const chunks = await this.getChunkDetails(text);
+    if (chunks.length === 0 && text) {
+      this.chunks.push(text);
+      this.gapsAfter.push(false);
+      return;
+    }
+
+    this.chunks.push(...chunks.map((chunk) => chunk.text));
+    this.gapsAfter.push(...chunks.map((chunk) => chunk.paragraphBreakAfter));
   }
 
   close() {

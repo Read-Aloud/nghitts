@@ -954,7 +954,11 @@ function normalizePunctuation(text) {
  * Clean up extra whitespace
  */
 function cleanWhitespace(text) {
-    text = text.replace(/\s+/g, ' ');
+    // Keep line breaks so the TTS chunker can distinguish paragraphs from
+    // ordinary sentence boundaries. Only horizontal whitespace is collapsed.
+    text = text
+        .replace(/[^\S\r\n]+/g, ' ')
+        .replace(/[ \t]*\r?\n[ \t]*/g, '\n');
     return text.trim();
 }
 

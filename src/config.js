@@ -103,3 +103,7 @@ export function getASRAssetUrl(filename, model = DEFAULT_ASR_MODEL) {
   }
   return `${import.meta.env.BASE_URL || '/'}asr-wasm/${filename}`;
 }
+
+/** Base silence appended between synthesized chunks at normal speed. */
+export const TTS_SENTENCE_SILENCE_MS = 250;
+export const TTS_PARAGRAPH_SILENCE_MS = 650;

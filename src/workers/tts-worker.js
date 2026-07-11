@@ -1,10 +1,23 @@
 import { PiperTTS, TextSplitterStream } from "../lib/piper-tts.js";
-import { getVietnameseModelUrls } from "../config.js";
+import {
+  getVietnameseModelUrls,
+  TTS_PARAGRAPH_SILENCE_MS,
+  TTS_SENTENCE_SILENCE_MS,
+} from "../config.js";
 
 let tts = null;
 let generation = null;
 let inferenceQueue = Promise.resolve();
 let latestGenerationId = null;
+
+function addTrailingSilence(audio, silenceMs) {
+  if (!silenceMs) return audio;
+
+  const silenceSamples = Math.round(audio.sampling_rate * silenceMs / 1000);
+  const waveform = new Float32Array(audio.audio.length + silenceSamples);
+  waveform.set(audio.audio);
+  return new audio.constructor(waveform, audio.sampling_rate);
+}
 
 async function initializeModel(modelName = null) {
   try {
@@ -43,11 +56,18 @@ async function prepareGeneration({ generationId, text, voice, speed }) {
 
   if (generationId !== latestGenerationId) return;
 
+  const lengthScale = 1.0 / (speed || 1.0);
+
   generation = {
     id: generationId,
     chunks: streamer.chunks,
+    gapsAfter: streamer.gapsAfter.map((paragraphBreakAfter, index) => {
+      if (index === streamer.chunks.length - 1) return 0;
+      const baseGapMs = paragraphBreakAfter ? TTS_PARAGRAPH_SILENCE_MS : TTS_SENTENCE_SILENCE_MS;
+      return baseGapMs * lengthScale;
+    }),
     speakerId: typeof voice === 'number' ? voice : parseInt(voice) || 0,
-    lengthScale: 1.0 / (speed || 1.0),
+    lengthScale,
   };
 
   self.postMessage({
@@ -72,11 +92,12 @@ async function synthesizeChunk({ generationId, index }) {
     const elapsedMs = performance.now() - startedAt;
     console.log(`[TTS] chunk ${index} synthesized in ${elapsedMs.toFixed(1)} ms: ${text}`);
     if (generation?.id !== generationId) return;
+    const audioWithSilence = addTrailingSilence(audio, activeGeneration.gapsAfter[index]);
     self.postMessage({
       status: "stream",
       generationId,
       index,
-      chunk: { audio: audio.toBlob(), text },
+      chunk: { audio: audioWithSilence.toBlob(), text },
     });
     break;
   }

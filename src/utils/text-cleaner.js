@@ -443,7 +443,7 @@ export async function processTextForTTS(text) {
     return processedText;
 }
 
-export async function chunkText(text) {
+export async function chunkTextWithBoundaries(text) {
     if (!text || typeof text !== 'string') {
         return [];
     }
@@ -457,9 +457,12 @@ export async function chunkText(text) {
     const lines = text.split('\n');
     const chunks = [];
 
-    for (const line of lines) {
+    for (let lineIndex = 0; lineIndex < lines.length; lineIndex++) {
+        const line = lines[lineIndex];
         // Skip empty lines
         if (line.trim() === '') continue;
+
+        const firstChunkIndex = chunks.length;
 
         // Check if the line already ends with punctuation
         const endsWithPunctuation = /[.!?]$/.test(line.trim());
@@ -476,8 +479,17 @@ export async function chunkText(text) {
         for (const sentence of sentences) {
             const trimmedSentence = sentence.trim();
             if (trimmedSentence) {
-                chunks.push(trimmedSentence);
+                chunks.push({
+                    text: trimmedSentence,
+                    paragraphBreakAfter: false,
+                });
             }
+        }
+
+        // A newline after this line marks the last sentence as a paragraph
+        // boundary. Multiple newlines intentionally use the same longer gap.
+        if (lineIndex < lines.length - 1 && chunks.length > firstChunkIndex) {
+            chunks[chunks.length - 1].paragraphBreakAfter = true;
         }
     }
 
@@ -485,10 +497,16 @@ export async function chunkText(text) {
         totalChunks: chunks.length,
         chunks: chunks.map((chunk, idx) => ({
             index: idx + 1,
-            text: chunk,
-            length: chunk.length
+            text: chunk.text,
+            length: chunk.text.length,
+            paragraphBreakAfter: chunk.paragraphBreakAfter,
         }))
     });
 
     return chunks;
+}
+
+export async function chunkText(text) {
+    const chunks = await chunkTextWithBoundaries(text);
+    return chunks.map((chunk) => chunk.text);
 }
