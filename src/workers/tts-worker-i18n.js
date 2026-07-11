@@ -2,50 +2,93 @@ import { PiperTTS, TextSplitterStream } from "../lib/piper-tts-i18n.js";
 import { getModelBaseUrl } from "../config.js";
 
 let tts = null;
+let generation = null;
+let inferenceQueue = Promise.resolve();
+let latestGenerationId = null;
 
 async function initializeModel(lang, modelName) {
   try {
     const base = getModelBaseUrl(lang);
-    const modelPath = `${base}${modelName}.onnx`;
-    const configPath = `${base}${modelName}.onnx.json`;
-
-    tts = await PiperTTS.from_pretrained(modelPath, configPath);
-
-    const speakers = tts.getSpeakers();
-
-    self.postMessage({ status: "ready", voices: speakers });
-  } catch (e) {
-    console.error("Error loading model:", e);
-    self.postMessage({ status: "error", data: e.message });
+    tts = await PiperTTS.from_pretrained(
+      `${base}${modelName}.onnx`,
+      `${base}${modelName}.onnx.json`,
+    );
+    self.postMessage({ status: "ready", voices: tts.getSpeakers() });
+  } catch (error) {
+    console.error("Error loading model:", error);
+    self.postMessage({ status: "error", data: error.message });
   }
 }
 
 async function handlePreview(text, voice, speed) {
-  try {
-    const streamer = new TextSplitterStream();
-    streamer.push(text);
-    streamer.close();
+  const streamer = new TextSplitterStream();
+  await streamer.push(text);
+  streamer.close();
 
-    const speakerId = typeof voice === 'number' ? voice : parseInt(voice) || 0;
-    const lengthScale = 1.0 / (speed || 1.0);
+  const stream = tts.stream(streamer, {
+    speakerId: typeof voice === 'number' ? voice : parseInt(voice) || 0,
+    lengthScale: 1.0 / (speed || 1.0),
+  });
 
-    const stream = tts.stream(streamer, {
-      speakerId,
-      lengthScale
-    });
-
-    for await (const { audio } of stream) {
-      const audioBlob = audio.toBlob();
-      self.postMessage({ status: "preview", audio: audioBlob });
-      break;
-    }
-  } catch (error) {
-    console.error('Error generating preview:', error);
+  for await (const { audio } of stream) {
+    self.postMessage({ status: "preview", audio: audio.toBlob() });
+    break;
   }
 }
 
-self.addEventListener("message", async (e) => {
-  const { type, text, voice, speed, lang, model } = e.data;
+async function prepareGeneration({ generationId, text, voice, speed }) {
+  const streamer = new TextSplitterStream();
+  await streamer.push(text);
+  streamer.close();
+
+  if (generationId !== latestGenerationId) return;
+
+  generation = {
+    id: generationId,
+    chunks: streamer.chunks,
+    speakerId: typeof voice === 'number' ? voice : parseInt(voice) || 0,
+    lengthScale: 1.0 / (speed || 1.0),
+  };
+
+  self.postMessage({ status: "prepared", generationId, totalChunks: generation.chunks.length });
+}
+
+async function synthesizeChunk({ generationId, index }) {
+  const activeGeneration = generation;
+  if (!activeGeneration || activeGeneration.id !== generationId) return;
+  if (!Number.isInteger(index) || index < 0 || index >= activeGeneration.chunks.length) return;
+
+  const startedAt = performance.now();
+  const stream = tts.stream([activeGeneration.chunks[index]], {
+    speakerId: activeGeneration.speakerId,
+    lengthScale: activeGeneration.lengthScale,
+  });
+
+  for await (const { text, audio } of stream) {
+    const elapsedMs = performance.now() - startedAt;
+    console.log(`[TTS] chunk ${index} synthesized in ${elapsedMs.toFixed(1)} ms: ${text}`);
+    if (generation?.id !== generationId) return;
+    self.postMessage({
+      status: "stream",
+      generationId,
+      index,
+      chunk: { audio: audio.toBlob(), text },
+    });
+    break;
+  }
+}
+
+function enqueue(task, generationId = null) {
+  inferenceQueue = inferenceQueue.then(task).catch((error) => {
+    console.error("Error during synthesis:", error);
+    if (generationId === null || generation?.id === generationId) {
+      self.postMessage({ status: "error", generationId, data: error.message });
+    }
+  });
+}
+
+self.addEventListener("message", async (event) => {
+  const { type, text, voice, speed, lang, model, generationId } = event.data;
 
   if (type === 'init') {
     await initializeModel(lang, model);
@@ -58,82 +101,28 @@ self.addEventListener("message", async (e) => {
   }
 
   if (type === 'preview') {
-    await handlePreview(text, voice, speed);
+    enqueue(() => handlePreview(text, voice, speed));
     return;
   }
 
-  const streamer = new TextSplitterStream();
-  streamer.push(text);
-  streamer.close();
-
-  const speakerId = typeof voice === 'number' ? voice : parseInt(voice) || 0;
-  const lengthScale = 1.0 / (speed || 1.0);
-
-  const stream = tts.stream(streamer, {
-    speakerId,
-    lengthScale
-  });
-  const chunks = [];
-
-  try {
-    for await (const { text: chunkText, audio } of stream) {
-      self.postMessage({
-        status: "stream",
-        chunk: {
-          audio: audio.toBlob(),
-          text: chunkText,
-        },
-      });
-      chunks.push(audio);
-    }
-  } catch (error) {
-    console.error("Error during streaming:", error);
-    self.postMessage({ status: "error", data: error.message });
+  if (type === 'cancel') {
+    if (generation?.id === generationId) generation = null;
+    if (latestGenerationId === generationId) latestGenerationId = null;
     return;
   }
 
-  let audio;
-  if (chunks.length > 0) {
+  if (type === 'start') {
+    latestGenerationId = generationId;
     try {
-      const originalSamplingRate = chunks[0].sampling_rate;
-      const length = chunks.reduce((sum, chunk) => sum + chunk.audio.length, 0);
-      let waveform = new Float32Array(length);
-      let offset = 0;
-      for (const chunk of chunks) {
-        waveform.set(chunk.audio, offset);
-        offset += chunk.audio.length;
-      }
-
-      normalizePeak(waveform, 0.9);
-      waveform = trimSilence(waveform, 0.002, Math.floor(originalSamplingRate * 0.02));
-
-      audio = new chunks[0].constructor(waveform, originalSamplingRate);
+      await prepareGeneration(event.data);
     } catch (error) {
-      console.error("Error processing audio chunks:", error);
-      self.postMessage({ status: "error", data: error.message });
-      return;
+      console.error("Error preparing generation:", error);
+      self.postMessage({ status: "error", generationId, data: error.message });
     }
+    return;
   }
 
-  self.postMessage({ status: "complete", audio: audio?.toBlob() });
+  if (type === 'synthesize') {
+    enqueue(() => synthesizeChunk(event.data), generationId);
+  }
 });
-
-function normalizePeak(f32, target = 0.9) {
-  if (!f32?.length) return;
-  let max = 1e-9;
-  for (let i = 0; i < f32.length; i++) max = Math.max(max, Math.abs(f32[i]));
-  const g = Math.min(4, target / max);
-  if (g < 1) {
-    for (let i = 0; i < f32.length; i++) f32[i] *= g;
-  }
-}
-
-function trimSilence(f32, thresh = 0.002, minSamples = 480) {
-  let s = 0;
-  let e = f32.length - 1;
-  while (s < e && Math.abs(f32[s]) < thresh) s++;
-  while (e > s && Math.abs(f32[e]) < thresh) e--;
-  s = Math.max(0, s - minSamples);
-  e = Math.min(f32.length, e + minSamples);
-  return f32.slice(s, e);
-}

@@ -2,150 +2,131 @@ import { PiperTTS, TextSplitterStream } from "../lib/piper-tts.js";
 import { getVietnameseModelUrls } from "../config.js";
 
 let tts = null;
+let generation = null;
+let inferenceQueue = Promise.resolve();
+let latestGenerationId = null;
 
-// Initialize the model
 async function initializeModel(modelName = null) {
   try {
-    // Default to the original model if no model name provided
     const defaultModel = 'en_US-libritts_r-medium';
     const model = modelName || defaultModel;
     const { modelPath, configPath } = getVietnameseModelUrls(model);
-    
+
     tts = await PiperTTS.from_pretrained(modelPath, configPath);
-    
-    // Get available speakers
-    const speakers = tts.getSpeakers();
-    
-    self.postMessage({ status: "ready", voices: speakers });
-  } catch (e) {
-    console.error("Error loading model:", e);
-    self.postMessage({ status: "error", data: e.message });
-  }
-}
-
-// Handle voice preview
-async function handlePreview(text, voice, speed) {
-  try {
-    const streamer = new TextSplitterStream();
-    await streamer.push(text);
-    streamer.close();
-
-    const speakerId = typeof voice === 'number' ? voice : parseInt(voice) || 0;
-    const lengthScale = 1.0 / (speed || 1.0);
-    
-    const stream = tts.stream(streamer, { 
-      speakerId, 
-      lengthScale
-    });
-
-    // Get just the first chunk for preview
-    for await (const { audio } of stream) {
-      // Create and play preview audio
-      const audioBlob = audio.toBlob();
-      self.postMessage({ status: "preview", audio: audioBlob });
-      break; // Only preview the first chunk
-    }
+    self.postMessage({ status: "ready", voices: tts.getSpeakers() });
   } catch (error) {
-    console.error('Error generating preview:', error);
+    console.error("Error loading model:", error);
+    self.postMessage({ status: "error", data: error.message });
   }
 }
 
-// Listen for messages from the main thread
-self.addEventListener("message", async (e) => {
-  const { type, text, voice, speed, model } = e.data;
-  
-  // Handle initialization
+async function handlePreview(text, voice, speed) {
+  const streamer = new TextSplitterStream();
+  await streamer.push(text);
+  streamer.close();
+
+  const stream = tts.stream(streamer, {
+    speakerId: typeof voice === 'number' ? voice : parseInt(voice) || 0,
+    lengthScale: 1.0 / (speed || 1.0),
+  });
+
+  for await (const { audio } of stream) {
+    self.postMessage({ status: "preview", audio: audio.toBlob() });
+    break;
+  }
+}
+
+async function prepareGeneration({ generationId, text, voice, speed }) {
+  const streamer = new TextSplitterStream();
+  await streamer.push(text);
+  streamer.close();
+
+  if (generationId !== latestGenerationId) return;
+
+  generation = {
+    id: generationId,
+    chunks: streamer.chunks,
+    speakerId: typeof voice === 'number' ? voice : parseInt(voice) || 0,
+    lengthScale: 1.0 / (speed || 1.0),
+  };
+
+  self.postMessage({
+    status: "prepared",
+    generationId,
+    totalChunks: generation.chunks.length,
+  });
+}
+
+async function synthesizeChunk({ generationId, index }) {
+  const activeGeneration = generation;
+  if (!activeGeneration || activeGeneration.id !== generationId) return;
+  if (!Number.isInteger(index) || index < 0 || index >= activeGeneration.chunks.length) return;
+
+  const startedAt = performance.now();
+  const stream = tts.stream([activeGeneration.chunks[index]], {
+    speakerId: activeGeneration.speakerId,
+    lengthScale: activeGeneration.lengthScale,
+  });
+
+  for await (const { text, audio } of stream) {
+    const elapsedMs = performance.now() - startedAt;
+    console.log(`[TTS] chunk ${index} synthesized in ${elapsedMs.toFixed(1)} ms: ${text}`);
+    if (generation?.id !== generationId) return;
+    self.postMessage({
+      status: "stream",
+      generationId,
+      index,
+      chunk: { audio: audio.toBlob(), text },
+    });
+    break;
+  }
+}
+
+function enqueue(task, generationId = null) {
+  inferenceQueue = inferenceQueue.then(task).catch((error) => {
+    console.error("Error during synthesis:", error);
+    if (generationId === null || generation?.id === generationId) {
+      self.postMessage({ status: "error", generationId, data: error.message });
+    }
+  });
+}
+
+self.addEventListener("message", async (event) => {
+  const { type, text, voice, speed, model, generationId } = event.data;
+
   if (type === 'init') {
     await initializeModel(model);
     return;
   }
-  
-  // Handle TTS generation
+
   if (!tts) {
     self.postMessage({ status: "error", data: "Model not initialized" });
     return;
   }
-  
-  // Handle voice preview
+
   if (type === 'preview') {
-    await handlePreview(text, voice, speed);
-    return;
-  }
-  
-  const streamer = new TextSplitterStream();
-
-  await streamer.push(text);
-  streamer.close(); // Indicate we won't add more text
-
-  // Convert voice from voice ID to speaker ID
-  const speakerId = typeof voice === 'number' ? voice : parseInt(voice) || 0;
-  
-  // console.log('🎤 Worker received voice ID:', voice);
-  // console.log('🎤 Worker converted to speaker ID:', speakerId);
-  
-  // Convert speed to lengthScale (inverse relationship: higher speed = lower lengthScale)
-  const lengthScale = 1.0 / (speed || 1.0);
-  
-  const stream = tts.stream(streamer, { 
-    speakerId, 
-    lengthScale
-  });
-  const chunks = [];
-
-  try {
-    for await (const { text, audio } of stream) {
-      self.postMessage({
-        status: "stream",
-        chunk: {
-          audio: audio.toBlob(),
-          text,
-        },
-      });
-      chunks.push(audio);
-    }
-  } catch (error) {
-    console.error("Error during streaming:", error);
-    self.postMessage({ status: "error", data: error.message });
+    enqueue(() => handlePreview(text, voice, speed));
     return;
   }
 
-  // Merge chunks
-  let audio;
-  if (chunks.length > 0) {
+  if (type === 'cancel') {
+    if (generation?.id === generationId) generation = null;
+    if (latestGenerationId === generationId) latestGenerationId = null;
+    return;
+  }
+
+  if (type === 'start') {
+    latestGenerationId = generationId;
     try {
-      const originalSamplingRate = chunks[0].sampling_rate;
-      const length = chunks.reduce((sum, chunk) => sum + chunk.audio.length, 0);
-      let waveform = new Float32Array(length);
-      let offset = 0;
-      for (const { audio } of chunks) {
-        waveform.set(audio, offset);
-        offset += audio.length;
-      }
-
-      // Normalize peaks & trim silence
-      normalizePeak(waveform, 1.0);
-
-      // Create a new merged RawAudio with the original sample rate
-      // @ts-expect-error - So that we don't need to import RawAudio
-      audio = new chunks[0].constructor(waveform, originalSamplingRate);
+      await prepareGeneration(event.data);
     } catch (error) {
-      console.error("Error processing audio chunks:", error);
-      self.postMessage({ status: "error", data: error.message });
-      return;
+      console.error("Error preparing generation:", error);
+      self.postMessage({ status: "error", generationId, data: error.message });
     }
+    return;
   }
 
-  self.postMessage({ status: "complete", audio: audio?.toBlob() });
+  if (type === 'synthesize') {
+    enqueue(() => synthesizeChunk(event.data), generationId);
+  }
 });
-
-function normalizePeak(f32, target = 0.9) {
-  if (!f32?.length) return;
-  let max = 1e-9;
-  for (let i = 0; i < f32.length; i++) max = Math.max(max, Math.abs(f32[i]));
-  const g = Math.min(4, target / max);
-  if (g < 1) {
-    for (let i = 0; i < f32.length; i++) f32[i] *= g;
-  }
-}
-
-// Note: Initialization now handled via init message from UI

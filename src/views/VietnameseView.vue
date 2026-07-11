@@ -31,6 +31,7 @@ const worker = ref(null);
 const voices = ref(null);
 const selectedVoice = ref(0);
 const chunks = ref([]);
+const totalChunks = ref(0);
 const availableModels = ref([]);
 const installedModels = ref([]);
 const selectedModel = ref("None");
@@ -45,6 +46,8 @@ const embeddedSpeakActive = ref(false);
 const embeddedVolume = ref(1);
 let modelReadyResolve = null;
 let modelReadyReject = null;
+let generationId = 0;
+const requestedChunkIndexes = new Set();
 
 // Computed properties
 const processed = computed(() => {
@@ -232,6 +235,8 @@ const resetLoadedVoice = () => {
   status.value = "idle";
   voices.value = null;
   chunks.value = [];
+  totalChunks.value = 0;
+  requestedChunkIndexes.clear();
   lastGeneration.value = null;
   isPlaying.value = false;
   currentChunkIndex.value = -1;
@@ -248,6 +253,8 @@ const restartWorker = (modelName = null) => {
   loadingProgress.value = 0;
   voices.value = null;
   chunks.value = [];
+  totalChunks.value = 0;
+  requestedChunkIndexes.clear();
   lastGeneration.value = null;
   isPlaying.value = false;
   currentChunkIndex.value = -1;
@@ -375,31 +382,51 @@ const setIsPlaying = (playing) => {
   isPlaying.value = playing;
 };
 
+const hasChunk = (index) => chunks.value.some((chunk) => chunk.index === index);
+
+const requestChunk = (index) => {
+  if (!worker.value || index < 0 || index >= totalChunks.value) return;
+  if (hasChunk(index) || requestedChunkIndexes.has(index)) return;
+
+  requestedChunkIndexes.add(index);
+  worker.value.postMessage({ type: 'synthesize', generationId, index });
+};
+
+const startGeneration = (params) => {
+  generationId++;
+  requestedChunkIndexes.clear();
+  chunks.value = [];
+  totalChunks.value = 0;
+  currentChunkIndex.value = 0;
+  status.value = "generating";
+  lastGeneration.value = params;
+  worker.value?.postMessage({ type: 'start', generationId, ...params });
+};
+
 const handleChunkEnd = () => {
-  if (status.value !== "generating" && currentChunkIndex.value === chunks.value.length - 1) {
+  if (currentChunkIndex.value >= totalChunks.value - 1) {
     isPlaying.value = false;
     currentChunkIndex.value = -1;
+    status.value = "ready";
     if (embeddedSpeakActive.value) {
       notifyNghiTTSHost("onEnd");
       embeddedSpeakActive.value = false;
     }
   } else {
-    currentChunkIndex.value = currentChunkIndex.value + 1;
+    const nextIndex = currentChunkIndex.value + 1;
+    currentChunkIndex.value = nextIndex;
+    requestChunk(nextIndex);
   }
 };
 
 const handlePlayPause = () => {
   if (!isPlaying.value && status.value === "ready" && !processed.value) {
-    status.value = "generating";
-    chunks.value = [];
-    currentChunkIndex.value = 0;
     const params = {
       text: text.value,
       voice: selectedVoice.value,
       speed: speed.value
     };
-    lastGeneration.value = params;
-    worker.value?.postMessage(params);
+    startGeneration(params);
   }
   if (currentChunkIndex.value === -1) {
     currentChunkIndex.value = 0;
@@ -492,17 +519,13 @@ const startEmbeddedSpeech = async ({ utterance: requestedText, voiceName, rate, 
       sentenceStartIndicies: sentenceRanges.map(({ startIndex }) => startIndex),
     });
 
-    status.value = "generating";
-    chunks.value = [];
-    currentChunkIndex.value = 0;
     isPlaying.value = true;
     const params = {
       text: requestedText,
       voice: selectedVoice.value,
       speed: speed.value
     };
-    lastGeneration.value = params;
-    worker.value?.postMessage(params);
+    startGeneration(params);
   } catch (err) {
     const message = err.message || String(err);
     notifyEmbeddedError(message);
@@ -517,26 +540,26 @@ const pauseEmbeddedSpeech = () => {
 
 const resumeEmbeddedSpeech = () => {
   if (!isEmbedded()) return;
-  if (chunks.value.length === 0) return;
   if (currentChunkIndex.value === -1) {
     currentChunkIndex.value = 0;
   }
+  requestChunk(currentChunkIndex.value);
   isPlaying.value = true;
 };
 
 const seekEmbeddedSentence = (index) => {
   if (!isEmbedded()) return;
-  if (chunks.value.length === 0) return;
+  if (totalChunks.value === 0) return;
   const numericIndex = Number(index);
   if (!Number.isInteger(numericIndex)) return;
 
   const nextIndex = Math.min(
     Math.max(numericIndex, 0),
-    chunks.value.length - 1
+    totalChunks.value - 1
   );
 
-  if (nextIndex === currentChunkIndex.value) return;
   currentChunkIndex.value = nextIndex;
+  requestChunk(nextIndex);
   isPlaying.value = true;
 };
 
@@ -547,8 +570,14 @@ const skipEmbeddedSentence = (direction) => {
 
 const stopEmbeddedSpeech = () => {
   if (!isEmbedded()) return;
+  worker.value?.postMessage({ type: 'cancel', generationId });
+  requestedChunkIndexes.clear();
+  chunks.value = [];
+  totalChunks.value = 0;
+  lastGeneration.value = null;
   isPlaying.value = false;
   currentChunkIndex.value = -1;
+  status.value = "ready";
   embeddedSpeakActive.value = false;
 };
 
@@ -587,6 +616,7 @@ const onMessageReceived = ({ data }) => {
       }
       break;
     case "error":
+      if (data.generationId != null && data.generationId !== generationId) break;
       if (worker.value?._progressInterval) {
         clearInterval(worker.value._progressInterval);
       }
@@ -596,11 +626,28 @@ const onMessageReceived = ({ data }) => {
       rejectModelReadyWaiter(new Error(data.data));
       postEmbeddedError(data.data);
       break;
-    case "stream":
-      chunks.value = [...chunks.value, data.chunk];
+    case "prepared":
+      if (data.generationId !== generationId) break;
+      totalChunks.value = data.totalChunks;
+      if (data.totalChunks === 0) {
+        status.value = "ready";
+        isPlaying.value = false;
+        currentChunkIndex.value = -1;
+        if (embeddedSpeakActive.value) {
+          notifyNghiTTSHost("onEnd");
+          embeddedSpeakActive.value = false;
+        }
+      } else {
+        requestChunk(currentChunkIndex.value === -1 ? 0 : currentChunkIndex.value);
+      }
       break;
-    case "complete":
-      status.value = "ready";
+    case "stream":
+      if (data.generationId !== generationId) break;
+      requestedChunkIndexes.delete(data.index);
+      if (!hasChunk(data.index)) {
+        chunks.value = [...chunks.value, { ...data.chunk, index: data.index }]
+          .sort((a, b) => a.index - b.index);
+      }
       break;
     case "preview":
       if (data.audio) {
@@ -621,6 +668,7 @@ const onErrorReceived = (e) => {
 
 const handleAudioChunkStart = (index) => {
   setCurrentChunkIndex(index);
+  if (isPlaying.value) requestChunk(index + 1);
   if (!embeddedSpeakActive.value) return;
 
   const range = embeddedSentenceRanges.value[index];
@@ -734,7 +782,7 @@ onUnmounted(() => {
               'bg-blue-800 shadow-lg': !isPlaying
             }"
             @click="handlePlayPause"
-            :disabled="(status === 'ready' && !isPlaying && !text) || (status !== 'ready' && chunks.length === 0)"
+            :disabled="(status === 'ready' && !isPlaying && !text) || !['ready', 'generating'].includes(status)"
           >
             <PauseIcon v-if="isPlaying" class="w-5 h-5" />
             <PlayIcon v-else class="w-5 h-5" />
@@ -747,16 +795,16 @@ onUnmounted(() => {
         <div class="w-0 h-0 hidden">
           <AudioChunk
             v-if="chunks.length > 0"
-            v-for="(chunk, index) in chunks"
-            :key="index"
+            v-for="chunk in chunks"
+            :key="chunk.index"
             :audio="chunk.audio"
-            :active="currentChunkIndex === index"
+            :active="currentChunkIndex === chunk.index"
             :playing="isPlaying"
             :volume="embeddedVolume"
             reset-when-inactive
             class="hidden"
-            @start="() => handleAudioChunkStart(index)"
-            @pause="() => { if (currentChunkIndex === index) setIsPlaying(false) }"
+            @start="() => handleAudioChunkStart(chunk.index)"
+            @pause="() => { if (currentChunkIndex === chunk.index) setIsPlaying(false) }"
             @end="handleChunkEnd"
           />
         </div>
