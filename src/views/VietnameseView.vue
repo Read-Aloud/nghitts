@@ -1,7 +1,6 @@
 <script setup>
 import { ref, onMounted, onUnmounted, computed, watch } from 'vue';
 import {
-  DownloadIcon,
   PauseIcon,
   PlayIcon,
   CopyIcon,
@@ -13,7 +12,6 @@ import AudioChunk from '../components/AudioChunk.vue';
 import ModelSelector from '../components/ModelSelector.vue';
 import DemoTable from '../components/DemoTable.vue';
 import { fetchAvailableModels } from '../utils/model-detector.js';
-import { addEntry } from '../utils/history-store.js';
 import { getVietnameseModelUrls } from '../config.js';
 import { areUrlsCached, installUrls, removeUrls } from '../utils/model-cache.js';
 import { playBlobWithWebAudio } from '../utils/web-audio-player.js';
@@ -33,7 +31,6 @@ const worker = ref(null);
 const voices = ref(null);
 const selectedVoice = ref(0);
 const chunks = ref([]);
-const result = ref(null);
 const availableModels = ref([]);
 const installedModels = ref([]);
 const selectedModel = ref("None");
@@ -235,7 +232,6 @@ const resetLoadedVoice = () => {
   status.value = "idle";
   voices.value = null;
   chunks.value = [];
-  result.value = null;
   lastGeneration.value = null;
   isPlaying.value = false;
   currentChunkIndex.value = -1;
@@ -252,7 +248,6 @@ const restartWorker = (modelName = null) => {
   loadingProgress.value = 0;
   voices.value = null;
   chunks.value = [];
-  result.value = null;
   lastGeneration.value = null;
   isPlaying.value = false;
   currentChunkIndex.value = -1;
@@ -412,16 +407,6 @@ const handlePlayPause = () => {
   isPlaying.value = !isPlaying.value;
 };
 
-const downloadAudio = () => {
-  if (!result.value) return;
-  const url = URL.createObjectURL(result.value);
-  const link = document.createElement("a");
-  link.href = url;
-  link.download = "audio.wav";
-  link.click();
-  URL.revokeObjectURL(url);
-}
-
 const handleCopy = async () => {
   await navigator.clipboard.writeText(text.value);
   copied.value = true;
@@ -509,7 +494,6 @@ const startEmbeddedSpeech = async ({ utterance: requestedText, voiceName, rate, 
 
     status.value = "generating";
     chunks.value = [];
-    result.value = null;
     currentChunkIndex.value = 0;
     isPlaying.value = true;
     const params = {
@@ -617,17 +601,6 @@ const onMessageReceived = ({ data }) => {
       break;
     case "complete":
       status.value = "ready";
-      result.value = data.audio;
-      if (data.audio && lastGeneration.value && selectedModel.value && !isEmbedded()) {
-        addEntry({
-          text: lastGeneration.value.text,
-          voice: lastGeneration.value.voice,
-          speed: lastGeneration.value.speed,
-          model: selectedModel.value,
-          lang: 'vi',
-          audio: data.audio,
-        }).catch((err) => console.error('History save failed:', err));
-      }
       break;
     case "preview":
       if (data.audio) {
@@ -767,15 +740,6 @@ onUnmounted(() => {
             <PlayIcon v-else class="w-5 h-5" />
             <span v-if="isPlaying">Pause</span>
             <span v-else>{{ processed || status === 'generating' ? 'Play' : 'Generate' }}</span>
-          </button>
-
-          <button
-            class="flex items-center justify-center gap-2 px-6 py-3 rounded-xl font-medium bg-white dark:bg-gray-800 border-2 border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 hover:bg-gray-50 dark:hover:bg-gray-700 transition-all transform hover:scale-[1.02] active:scale-[0.98] disabled:scale-100 disabled:opacity-50 disabled:cursor-not-allowed"
-            @click="downloadAudio"
-            :disabled="!result || status !== 'ready'"
-          >
-            <DownloadIcon class="w-4 h-4" />
-            Download Audio
           </button>
         </div>
 

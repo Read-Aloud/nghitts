@@ -2,12 +2,10 @@
 import { computed, ref } from 'vue';
 import { RouterView, useRoute } from 'vue-router';
 import ThemeToggle from './components/ThemeToggle.vue';
-import HistoryPanel from './components/HistoryPanel.vue';
-import { Github, History } from 'lucide-vue-next';
+import { Github } from 'lucide-vue-next';
 
 const shareCopied = ref(false);
 let shareFeedbackTimer = null;
-const historyOpen = ref(false);
 const route = useRoute();
 
 const isEmbedded = computed(() => route.query.embed === '1' || route.query.embed === 'true');
@@ -64,16 +62,6 @@ function copyShareLink() {
           >
             {{ shareCopied ? 'Đã copy link' : 'Chia sẻ' }}
           </button>
-          <button
-            v-if="!isEmbedded"
-            type="button"
-            class="px-3 py-1.5 rounded-full text-sm bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 transition-colors flex items-center gap-1.5"
-            :class="historyOpen ? 'bg-blue-100 dark:bg-blue-900/50 text-blue-700 dark:text-blue-300 font-medium' : ''"
-            @click="historyOpen = !historyOpen"
-          >
-            <History class="w-4 h-4" />
-            Lịch sử
-          </button>
           <ThemeToggle />
         </div>
       </div>
@@ -127,7 +115,5 @@ function copyShareLink() {
     <main class="container mx-auto px-4 pt-6 pb-4 max-w-4xl">
       <RouterView />
     </main>
-
-    <HistoryPanel v-if="!isEmbedded" :open="historyOpen" @close="historyOpen = false" />
   </div>
 </template>
